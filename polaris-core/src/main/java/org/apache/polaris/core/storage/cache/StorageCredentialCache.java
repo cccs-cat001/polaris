@@ -31,6 +31,7 @@ import java.util.Set;
 import java.util.function.Function;
 import org.apache.iceberg.exceptions.UnprocessableEntityException;
 import org.apache.polaris.core.PolarisDiagnostics;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.FeatureConfiguration;
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.context.RealmContext;
@@ -109,7 +110,8 @@ public class StorageCredentialCache {
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
-      Optional<String> refreshCredentialsEndpoint) {
+      Optional<String> refreshCredentialsEndpoint,
+      PolarisPrincipal polarisPrincipal) {
     RealmContext realmContext = storageCredentialsVendor.getRealmContext();
     RealmConfig realmConfig = storageCredentialsVendor.getRealmConfig();
     if (!isTypeSupported(polarisEntity.getType())) {
@@ -134,7 +136,8 @@ public class StorageCredentialCache {
                   allowListOperation,
                   allowedReadLocations,
                   allowedWriteLocations,
-                  refreshCredentialsEndpoint);
+                  refreshCredentialsEndpoint,
+                  polarisPrincipal);
           if (scopedCredentialsResult.isSuccess()) {
             long maxCacheDurationMs = maxCacheDurationMs(realmConfig);
             return new StorageCredentialCacheEntry(

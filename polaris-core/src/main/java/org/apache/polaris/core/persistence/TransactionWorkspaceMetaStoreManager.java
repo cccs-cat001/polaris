@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.apache.polaris.core.PolarisCallContext;
 import org.apache.polaris.core.PolarisDiagnostics;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.entity.LocationBasedEntity;
 import org.apache.polaris.core.entity.PolarisBaseEntity;
 import org.apache.polaris.core.entity.PolarisEntity;
@@ -324,7 +325,8 @@ public class TransactionWorkspaceMetaStoreManager implements PolarisMetaStoreMan
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
-      Optional<String> refreshCredentialsEndpoint) {
+      Optional<String> refreshCredentialsEndpoint,
+      PolarisPrincipal polarisPrincipal) {
     return delegate.getSubscopedCredsForEntity(
         callCtx,
         catalogId,
@@ -333,7 +335,8 @@ public class TransactionWorkspaceMetaStoreManager implements PolarisMetaStoreMan
         allowListOperation,
         allowedReadLocations,
         allowedWriteLocations,
-        refreshCredentialsEndpoint);
+        refreshCredentialsEndpoint,
+        polarisPrincipal);
   }
 
   @Override

@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.storage.PolarisStorageActions;
 import org.apache.polaris.core.storage.PolarisStorageConfigurationInfo;
@@ -114,7 +115,8 @@ public class PolarisStorageIntegrationProviderImpl implements PolarisStorageInte
                   boolean allowListOperation,
                   @Nonnull Set<String> allowedReadLocations,
                   @Nonnull Set<String> allowedWriteLocations,
-                  Optional<String> refreshCredentialsEndpoint) {
+                  Optional<String> refreshCredentialsEndpoint,
+                  PolarisPrincipal polarisPrincipal) {
                 return StorageAccessConfig.builder().supportsCredentialVending(false).build();
               }
 

@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.polaris.core.PolarisCallContext;
 import org.apache.polaris.core.PolarisDiagnostics;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.FeatureConfiguration;
 import org.apache.polaris.core.entity.AsyncTaskType;
 import org.apache.polaris.core.entity.CatalogEntity;
@@ -2098,7 +2099,8 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
-      Optional<String> refreshCredentialsEndpoint) {
+      Optional<String> refreshCredentialsEndpoint,
+      PolarisPrincipal polarisPrincipal) {
 
     // get meta store session we should be using
     TransactionalPersistence ms = ((TransactionalPersistence) callCtx.getMetaStore());
@@ -2134,7 +2136,8 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
               allowListOperation,
               allowedReadLocations,
               allowedWriteLocations,
-              refreshCredentialsEndpoint);
+              refreshCredentialsEndpoint,
+              polarisPrincipal);
       return new ScopedCredentialsResult(storageAccessConfig);
     } catch (Exception ex) {
       return new ScopedCredentialsResult(

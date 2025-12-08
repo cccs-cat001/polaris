@@ -22,6 +22,7 @@ import jakarta.annotation.Nonnull;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.RealmConfig;
 
 /**
@@ -67,7 +68,8 @@ public abstract class PolarisStorageIntegration<T extends PolarisStorageConfigur
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
-      Optional<String> refreshCredentialsEndpoint);
+      Optional<String> refreshCredentialsEndpoint,
+      PolarisPrincipal polarisPrincipal);
 
   /**
    * Validate access for the provided operation actions and locations.
