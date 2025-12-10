@@ -1,8 +1,5 @@
 package org.apache.polaris.service.storage;
 
-import static org.apache.polaris.core.config.FeatureConfiguration.STORAGE_CREDENTIAL_DURATION_SECONDS;
-
-import jakarta.annotation.Nonnull;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
@@ -10,6 +7,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
+import static org.apache.polaris.core.config.FeatureConfiguration.STORAGE_CREDENTIAL_DURATION_SECONDS;
+
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.storage.InMemoryStorageIntegration;
 import org.apache.polaris.core.storage.StorageAccessConfig;
@@ -20,6 +20,8 @@ import org.apache.polaris.core.storage.aws.StsClientProvider;
 import org.apache.polaris.core.storage.aws.StsClientProvider.StsDestination;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import jakarta.annotation.Nonnull;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.policybuilder.iam.IamConditionOperator;
 import software.amazon.awssdk.policybuilder.iam.IamEffect;
@@ -29,10 +31,12 @@ import software.amazon.awssdk.policybuilder.iam.IamStatement;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
 import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
+import software.amazon.awssdk.services.sts.model.AssumeRoleWithWebIdentityRequest;
+import software.amazon.awssdk.services.sts.model.AssumeRoleWithWebIdentityResponse;
 
-public class CyberS3CredentialsStorageIntegration
-    extends InMemoryStorageIntegration<AwsStorageConfigurationInfo> {
-  private final StsClientProvider stsClientProvider;
+public class CyberS3CredentialsStorageIntegration 
+    extends InMemoryStorageIntegration<AwsStorageConfigurationInfo>{
+    private final StsClientProvider stsClientProvider;
   private final Optional<AwsCredentialsProvider> credentialsProvider;
 
   private static final Logger LOGGER =
@@ -64,7 +68,7 @@ public class CyberS3CredentialsStorageIntegration
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
-      Optional<String> refreshCredentialsEndpoint) {
+      Optional<String> refreshCredentialsEndpoint, PolarisPrincipal principal) {
     int storageCredentialDurationSeconds =
         realmConfig.getConfig(STORAGE_CREDENTIAL_DURATION_SECONDS);
     AwsStorageConfigurationInfo storageConfig = config();
@@ -73,21 +77,25 @@ public class CyberS3CredentialsStorageIntegration
     StorageAccessConfig.Builder accessConfig = StorageAccessConfig.builder();
 
     if (shouldUseSts(storageConfig)) {
-      AssumeRoleRequest.Builder request =
-          AssumeRoleRequest.builder()
-              .externalId(storageConfig.getExternalId())
-              .roleArn(storageConfig.getRoleARN())
-              .roleSessionName("PolarisCyberS3CredentialsStorageIntegration")
-              .policy(
-                  policyString(
-                          storageConfig,
-                          allowListOperation,
-                          allowedReadLocations,
-                          allowedWriteLocations,
-                          region,
-                          accountId)
-                      .toJson())
-              .durationSeconds(storageCredentialDurationSeconds);
+     AssumeRoleWithWebIdentityRequest.Builder request =
+            AssumeRoleWithWebIdentityRequest.builder()
+                .webIdentityToken(
+                    principal.getToken().orElseThrow(
+                        () ->
+                            new IllegalArgumentException(
+                                "Token must be provided when PROPAGATE_API_USER_IDENTITY is true")))
+                .roleArn(storageConfig.getRoleARN())
+                .roleSessionName("PolarisAwsCredentialsStorageIntegration")
+                .policy(
+                    policyString(
+                            storageConfig,
+                            allowListOperation,
+                            allowedReadLocations,
+                            allowedWriteLocations,
+                            region,
+                            accountId)
+                        .toJson())
+                .durationSeconds(storageCredentialDurationSeconds);
       credentialsProvider.ifPresent(
           cp -> request.overrideConfiguration(b -> b.credentialsProvider(cp)));
 
@@ -96,7 +104,8 @@ public class CyberS3CredentialsStorageIntegration
       StsClient stsClient =
           stsClientProvider.stsClient(StsDestination.of(storageConfig.getStsEndpointUri(), region));
 
-      AssumeRoleResponse response = stsClient.assumeRole(request.build());
+      AssumeRoleWithWebIdentityResponse response = stsClient.assumeRoleWithWebIdentity(request.build());
+      
       accessConfig.put(StorageAccessProperty.AWS_KEY_ID, response.credentials().accessKeyId());
       accessConfig.put(
           StorageAccessProperty.AWS_SECRET_KEY, response.credentials().secretAccessKey());

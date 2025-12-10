@@ -1,19 +1,11 @@
 package org.apache.polaris.service.storage;
 
-import com.google.api.client.http.javanet.NetHttpTransport;
-import com.google.auth.http.HttpTransportFactory;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.cloud.ServiceOptions;
-import jakarta.annotation.Nonnull;
-import jakarta.annotation.Nullable;
-import jakarta.annotation.Priority;
-import jakarta.enterprise.inject.Alternative;
-import jakarta.inject.Inject;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.storage.PolarisStorageActions;
 import org.apache.polaris.core.storage.PolarisStorageConfigurationInfo;
@@ -27,12 +19,23 @@ import org.apache.polaris.core.storage.azure.AzureCredentialsStorageIntegration;
 import org.apache.polaris.core.storage.azure.AzureStorageConfigurationInfo;
 import org.apache.polaris.core.storage.gcp.GcpCredentialsStorageIntegration;
 import org.apache.polaris.core.storage.gcp.GcpStorageConfigurationInfo;
+
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.auth.http.HttpTransportFactory;
+import com.google.auth.oauth2.GoogleCredentials;
+import com.google.cloud.ServiceOptions;
+
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
+import jakarta.annotation.Priority;
+import jakarta.enterprise.inject.Alternative;
+import jakarta.inject.Inject;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 
 @Alternative
 @Priority(10)
-public class CyberStorageIntegrationProviderImpl {
-  private final StsClientProvider stsClientProvider;
+public class CyberStorageIntegrationProviderImpl implements PolarisStorageIntegrationProvider {
+    private final StsClientProvider stsClientProvider;
   private final Optional<AwsCredentialsProvider> stsCredentials;
   private final Supplier<GoogleCredentials> gcpCredsProvider;
 
@@ -68,7 +71,7 @@ public class CyberStorageIntegrationProviderImpl {
       case S3:
         storageIntegration =
             (PolarisStorageIntegration<T>)
-                new AwsCredentialsStorageIntegration(
+                new CyberS3CredentialsStorageIntegration(
                     (AwsStorageConfigurationInfo) polarisStorageConfigurationInfo,
                     stsClientProvider,
                     stsCredentials);
