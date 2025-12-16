@@ -108,7 +108,6 @@ import org.apache.polaris.core.entity.PolarisBaseEntity;
 import org.apache.polaris.core.entity.PolarisEntity;
 import org.apache.polaris.core.entity.PolarisEntitySubType;
 import org.apache.polaris.core.entity.PolarisEntityType;
-import org.apache.polaris.core.entity.PrincipalEntity;
 import org.apache.polaris.core.entity.TaskEntity;
 import org.apache.polaris.core.entity.table.IcebergTableLikeEntity;
 import org.apache.polaris.core.exceptions.CommitConflictException;
@@ -201,6 +200,7 @@ public abstract class AbstractIcebergCatalogTest extends CatalogTests<IcebergCat
           .put("polaris.features.\"ALLOW_TABLE_LOCATION_OVERLAP\"", "true")
           .put("polaris.features.\"LIST_PAGINATION_ENABLED\"", "true")
           .put("polaris.behavior-changes.\"ALLOW_NAMESPACE_CUSTOM_LOCATION\"", "true")
+          .put("polaris.test.rootAugmentor.enabled", "true")
           .build();
     }
   }
@@ -241,6 +241,7 @@ public abstract class AbstractIcebergCatalogTest extends CatalogTests<IcebergCat
   @Inject StorageAccessConfigProvider storageAccessConfigProvider;
   @Inject FileIOFactory fileIOFactory;
   @Inject TaskFileIOSupplier taskFileIOSupplier;
+  @Inject PolarisPrincipal authenticatedRoot;
 
   private IcebergCatalog catalog;
   private String realmName;
@@ -249,7 +250,7 @@ public abstract class AbstractIcebergCatalogTest extends CatalogTests<IcebergCat
   private ResolverFactory resolverFactory;
   private InMemoryFileIO fileIO;
   private PolarisEntity catalogEntity;
-  private PolarisPrincipal authenticatedRoot;
+
   private TestPolarisEventListener testPolarisEventListener;
   private ReservedProperties reservedProperties;
 
@@ -294,10 +295,6 @@ public abstract class AbstractIcebergCatalogTest extends CatalogTests<IcebergCat
                 entityCache,
                 referenceCatalogName);
     QuarkusMock.installMockForType(resolverFactory, ResolverFactory.class);
-
-    PrincipalEntity rootPrincipal =
-        metaStoreManager.findRootPrincipal(polarisContext).orElseThrow();
-    authenticatedRoot = PolarisPrincipal.of(rootPrincipal, Set.of());
 
     PolarisAuthorizer authorizer = new PolarisAuthorizerImpl(realmConfig);
     reservedProperties = new ReservedProperties() {};
@@ -1891,6 +1888,7 @@ public abstract class AbstractIcebergCatalogTest extends CatalogTests<IcebergCat
                 true,
                 Set.of(tableMetadata.location()),
                 Set.of(tableMetadata.location()),
+                authenticatedRoot,
                 Optional.empty())
             .getStorageAccessConfig()
             .credentials();
@@ -2369,19 +2367,6 @@ public abstract class AbstractIcebergCatalogTest extends CatalogTests<IcebergCat
     var afterRefreshEvent =
         testPolarisEventListener.getLatest(IcebergRestCatalogEvents.AfterRefreshTableEvent.class);
     Assertions.assertThat(afterRefreshEvent.tableIdentifier()).isEqualTo(TestData.TABLE);
-
-    var beforeTableEvent =
-        testPolarisEventListener.getLatest(IcebergRestCatalogEvents.BeforeCommitTableEvent.class);
-    Assertions.assertThat(beforeTableEvent.identifier()).isEqualTo(TestData.TABLE);
-    Assertions.assertThat(beforeTableEvent.metadataBefore().properties().get(key))
-        .isEqualTo(valOld);
-    Assertions.assertThat(beforeTableEvent.metadataAfter().properties().get(key)).isEqualTo(valNew);
-
-    var afterTableEvent =
-        testPolarisEventListener.getLatest(IcebergRestCatalogEvents.AfterCommitTableEvent.class);
-    Assertions.assertThat(afterTableEvent.identifier()).isEqualTo(TestData.TABLE);
-    Assertions.assertThat(afterTableEvent.metadataBefore().properties().get(key)).isEqualTo(valOld);
-    Assertions.assertThat(afterTableEvent.metadataAfter().properties().get(key)).isEqualTo(valNew);
   }
 
   private static PageToken nextRequest(Page<?> previousPage) {

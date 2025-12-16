@@ -17,7 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-linkTitle: Release Guide
+linkTitle: Release Manager Guide
 type: docs
 weight: 500
 ---

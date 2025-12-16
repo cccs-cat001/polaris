@@ -51,20 +51,25 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 
 - The EclipseLink Persistence implementation has been completely removed.
 - The default request ID header name has changed from `Polaris-Request-Id` to `X-Request-ID`.
+- The (Before/After)CommitTableEvent has been removed.
 
 ### New Features
 
 - Added `--no-sts` flag to CLI to support S3-compatible storage systems that do not have Security Token Service available.
 - Support credential vending for federated catalogs. `ALLOW_FEDERATED_CATALOGS_CREDENTIAL_VENDING` (default: true) was added to toggle this feature.
 - Enhanced catalog federation with SigV4 authentication support, additional authentication types for credential vending, and location-based access restrictions to block credential vending for remote tables outside allowed location lists.
+- Added `topologySpreadConstraints` support in Helm chart.
+- Added support for including principal name in subscoped credentials. `INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL` (default: false) can be used to toggle this feature. If enabled, cached credentials issued to one principal will no longer be available for others.
 
 ### Changes
 
+- The `gcpServiceAccount` configuration value now affects Polaris behavior (enables service account impersonation). This value was previously defined but unused. This change may affect existing deployments that have populated this property.
 - `client.region` is no longer considered a "credential" property (related to Iceberg REST Catalog API).
 - Relaxed the requirements for S3 storage's ARN to allow Polaris to connect to more non-AWS S3 storage appliances. 
 - Added checksum to helm deployment so that it will restart when the configmap has changed.
 - Generic Table is no longer in beta and is generally-available.
-- Added Windows support for Python client
+- Added Windows support for Python client.
+- (Before/After)UpdateTableEvent is emitted for all table updates within a transaction.
 
 ### Deprecations
 

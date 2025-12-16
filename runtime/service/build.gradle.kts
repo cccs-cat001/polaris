@@ -30,7 +30,6 @@ dependencies {
   implementation(project(":polaris-api-management-service"))
   implementation(project(":polaris-api-iceberg-service"))
   implementation(project(":polaris-api-catalog-service"))
-
   runtimeOnly(project(":polaris-relational-jdbc"))
 
   implementation(project(":polaris-runtime-defaults"))
@@ -151,7 +150,7 @@ dependencies {
 
   testImplementation(platform(libs.testcontainers.bom))
   testImplementation("org.testcontainers:testcontainers")
-  testImplementation("org.testcontainers:postgresql")
+  testImplementation("org.testcontainers:testcontainers-postgresql")
 
   testFixturesImplementation(project(":polaris-core"))
   testFixturesImplementation(project(":polaris-api-management-model"))
