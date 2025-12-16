@@ -22,6 +22,7 @@ import jakarta.annotation.Nonnull;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.RealmConfig;
 
 /**
@@ -62,11 +63,12 @@ public abstract class PolarisStorageIntegration<T extends PolarisStorageConfigur
    *     handling the relative path
    * @return An enum map including the scoped credentials
    */
-  public abstract AccessConfig getSubscopedCreds(
+  public abstract StorageAccessConfig getSubscopedCreds(
       @Nonnull RealmConfig realmConfig,
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
+      @Nonnull PolarisPrincipal polarisPrincipal,
       Optional<String> refreshCredentialsEndpoint);
 
   /**

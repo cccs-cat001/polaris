@@ -32,8 +32,9 @@ import org.apache.polaris.core.persistence.PolarisMetaStoreManager;
 import org.apache.polaris.core.persistence.resolver.PolarisResolutionManifest;
 import org.apache.polaris.core.persistence.resolver.ResolverFactory;
 import org.apache.polaris.service.catalog.iceberg.IcebergCatalog;
-import org.apache.polaris.service.catalog.io.AccessConfigProvider;
 import org.apache.polaris.service.catalog.io.FileIOFactory;
+import org.apache.polaris.service.catalog.io.StorageAccessConfigProvider;
+import org.apache.polaris.service.events.PolarisEventMetadataFactory;
 import org.apache.polaris.service.events.listeners.PolarisEventListener;
 import org.apache.polaris.service.task.TaskExecutor;
 import org.slf4j.Logger;
@@ -46,10 +47,11 @@ public class PolarisCallContextCatalogFactory implements CallContextCatalogFacto
 
   private final PolarisDiagnostics diagnostics;
   private final TaskExecutor taskExecutor;
-  private final AccessConfigProvider accessConfigProvider;
+  private final StorageAccessConfigProvider storageAccessConfigProvider;
   private final FileIOFactory fileIOFactory;
   private final ResolverFactory resolverFactory;
   private final PolarisEventListener polarisEventListener;
+  private final PolarisEventMetadataFactory eventMetadataFactory;
   private final PolarisMetaStoreManager metaStoreManager;
   private final CallContext callContext;
   private final PolarisPrincipal principal;
@@ -59,18 +61,20 @@ public class PolarisCallContextCatalogFactory implements CallContextCatalogFacto
       PolarisDiagnostics diagnostics,
       ResolverFactory resolverFactory,
       TaskExecutor taskExecutor,
-      AccessConfigProvider accessConfigProvider,
+      StorageAccessConfigProvider storageAccessConfigProvider,
       FileIOFactory fileIOFactory,
       PolarisEventListener polarisEventListener,
+      PolarisEventMetadataFactory eventMetadataFactory,
       PolarisMetaStoreManager metaStoreManager,
       CallContext callContext,
       PolarisPrincipal principal) {
     this.diagnostics = diagnostics;
     this.resolverFactory = resolverFactory;
     this.taskExecutor = taskExecutor;
-    this.accessConfigProvider = accessConfigProvider;
+    this.storageAccessConfigProvider = storageAccessConfigProvider;
     this.fileIOFactory = fileIOFactory;
     this.polarisEventListener = polarisEventListener;
+    this.eventMetadataFactory = eventMetadataFactory;
     this.metaStoreManager = metaStoreManager;
     this.callContext = callContext;
     this.principal = principal;
@@ -94,9 +98,10 @@ public class PolarisCallContextCatalogFactory implements CallContextCatalogFacto
             resolvedManifest,
             principal,
             taskExecutor,
-            accessConfigProvider,
+            storageAccessConfigProvider,
             fileIOFactory,
-            polarisEventListener);
+            polarisEventListener,
+            eventMetadataFactory);
 
     Map<String, String> catalogProperties = new HashMap<>(catalog.getPropertiesAsMap());
     String defaultBaseLocation = catalog.getBaseLocation();

@@ -21,32 +21,85 @@ Title: Polaris Helm Chart
 type: docs
 weight: 675
 ---
-
-<!---
-  This README.md file was generated with:
-  https://github.com/norwoodj/helm-docs
-  Do not modify the README.md file directly, please modify README.md.gotmpl instead.
-  To re-generate the README.md file, install helm-docs then run from the repo root:
-  helm-docs --chart-search-root=helm
--->
-
-![Version: 1.2.0-incubating-SNAPSHOT](https://img.shields.io/badge/Version-1.2.0--incubating--SNAPSHOT-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.2.0-incubating-SNAPSHOT](https://img.shields.io/badge/AppVersion-1.2.0--incubating--SNAPSHOT-informational?style=flat-square)
-
-A Helm chart for Apache Polaris (incubating).
-
-**Homepage:** <https://polaris.apache.org/>
-
-## Source Code
-
-* <https://github.com/apache/polaris>
-
 ## Installation
 
-### Running locally with a Minikube cluster
+The instructions below are for the local Minikube cluster. They assume Minikube and Helm are installed.
 
-The below instructions assume Minikube and Helm are installed.
+### Installing from the official repository (recommended)
 
-Start the Minikube cluster, build and load image into the Minikube cluster:
+Start the Minikube cluster, add the official Polaris Helm repository, create the target namespace, and install the chart:
+```bash
+minikube start
+helm repo add polaris https://downloads.apache.org/incubator/polaris/helm-chart
+helm repo update
+kubectl create namespace polaris
+helm install polaris polaris/polaris --namespace polaris --devel
+```
+
+{{< alert note >}}
+The --devel flag is required while Polaris is in the incubation phase.
+Helm treats the -incubating suffix as a pre‑release by SemVer rules, and will skip charts that are not in a stable versioning scheme by default.
+{{< /alert >}}
+
+Now the cluster should be up and running. You can run the built-in connection test to verify:
+```bash
+helm test polaris --namespace polaris
+```
+
+Default Polaris Helm chart values are for a non-persistent backend. To use a persistent backend, you will need to override default values and create required resources.
+Polaris Helm chart package includes a number of files that can be used as a starting point for such configuration. To use them, download the chart into a local directory:
+```bash
+helm pull polaris \
+  --repo https://downloads.apache.org/incubator/polaris/helm-chart \
+  --devel \
+  --untar \
+  --untardir ./helm
+```
+
+{{< alert warning >}}
+The examples below use values files located in the `helm/polaris/ci` directory.
+**These files are intended for testing purposes primarily, and may not be suitable for production use**.
+For production deployments, create your own values files based on the provided examples.
+{{< /alert >}}
+
+Create required resources:
+```bash
+kubectl apply --namespace polaris -f helm/polaris/ci/fixtures/
+kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=postgres --timeout=120s
+```
+
+{{< alert warning >}}
+The Postgres deployment set up in the fixtures directory is intended for testing purposes only and is not suitable for production use. For production deployments, use a managed Postgres service or a properly configured and secured Postgres instance.
+{{< /alert >}}
+
+Install the chart with a persistent backend:
+```bash
+helm upgrade --install --namespace polaris \
+  --values helm/polaris/ci/persistence-values.yaml \
+  polaris helm/polaris
+kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=polaris --timeout=120s
+```
+
+Run the catalog bootstrap using the Polaris admin tool to initialize the catalog with the required configuration.
+For example, to run it as a new pod in the Minikube cluster (the polaris-admin-tool image will be pulled automatically from Docker Hub):
+```bash
+kubectl run polaris-bootstrap \
+  -n polaris \
+  --image=apache/polaris-admin-tool:latest \
+  --restart=Never \
+  --rm -it \
+  --env="quarkus.datasource.username=$(kubectl get secret polaris-persistence -n polaris -o jsonpath='{.data.username}' | base64 --decode)" \
+  --env="quarkus.datasource.password=$(kubectl get secret polaris-persistence -n polaris -o jsonpath='{.data.password}' | base64 --decode)" \
+  --env="quarkus.datasource.jdbc.url=$(kubectl get secret polaris-persistence -n polaris -o jsonpath='{.data.jdbcUrl}' | base64 --decode)" \
+  -- \
+  bootstrap -r POLARIS -c POLARIS,root,pass -p
+```
+
+### Build and install from source (advanced)
+
+Here it is assumed that you have cloned the Polaris Git repository and set up prerequisites to build the project (see [Quickstart Guide](https://polaris.apache.org/in-dev/unreleased/getting-started/install-dependencies/) for details).
+
+Start the Minikube cluster, then build and load the image into the Minikube cluster:
 
 ```bash
 minikube start
@@ -60,12 +113,6 @@ eval $(minikube docker-env)
   -Dquarkus.container-image.build=true
 ```
 
-### Installing the chart locally
-
-The below instructions assume a local Kubernetes cluster is running and Helm is installed.
-
-#### Common setup
-
 Create the target namespace:
 ```bash
 kubectl create namespace polaris
@@ -75,19 +122,23 @@ Create all the required resources in the `polaris` namespace. This usually inclu
 database, Kubernetes secrets, and service accounts. The Polaris chart does not create
 these resources automatically, as they are not required for all Polaris deployments. The chart will
 fail if these resources are not created beforehand. You can find some examples in the
-`helm/polaris/ci/fixtures` directory, but beware that these are primarily intended for tests.
+`helm/polaris/ci/fixtures` directory, but beware that these are primarily intended for tests. For example, you can run the following commands:
+```bash
+kubectl apply --namespace polaris -f helm/polaris/ci/fixtures/
+kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=postgres --timeout=120s
+```
 
 Below are two sample deployment models for installing the chart: one with a non-persistent backend and another with a persistent backend.
 
 {{< alert warning >}}
 The examples below use values files located in the `helm/polaris/ci` directory.
-**These files are intended for testing purposes primarily, and may not be suitable for production use**. 
+**These files are intended for testing purposes primarily, and may not be suitable for production use**.
 For production deployments, create your own values files based on the provided examples.
 {{< /alert >}}
 
 #### Non-persistent backend
 
-Install the chart with a non-persistent backend. From Polaris repo root:
+Install the chart with a non-persistent backend. From the Polaris repo root:
 ```bash
 helm upgrade --install --namespace polaris \
   polaris helm/polaris
@@ -99,7 +150,7 @@ helm upgrade --install --namespace polaris \
 The Postgres deployment set up in the fixtures directory is intended for testing purposes only and is not suitable for production use. For production deployments, use a managed Postgres service or a properly configured and secured Postgres instance.
 {{< /alert >}}
 
-Install the chart with a persistent backend. From Polaris repo root:
+Install the chart with a persistent backend. From the Polaris repo root:
 ```bash
 helm upgrade --install --namespace polaris \
   --values helm/polaris/ci/persistence-values.yaml \
@@ -107,11 +158,11 @@ helm upgrade --install --namespace polaris \
 kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=polaris --timeout=120s
 ```
 
-To access Polaris and Postgres locally, set up port forwarding for both services (This is needed for bootstrap processes):
+To access Polaris and Postgres locally, set up port forwarding for both services (this is needed for bootstrap processes):
 ```bash
-kubectl port-forward -n polaris $(kubectl get pod -n polaris -l app.kubernetes.io/name=polaris -o jsonpath='{.items[0].metadata.name}') 8181:8181
+kubectl port-forward -n polaris $(kubectl get pod -n polaris -l app.kubernetes.io/name=polaris -o jsonpath='{.items[0].metadata.name}') 8181:8181 &
 
-kubectl port-forward -n polaris $(kubectl get pod -n polaris -l app.kubernetes.io/name=postgres -o jsonpath='{.items[0].metadata.name}') 5432:5432
+kubectl port-forward -n polaris $(kubectl get pod -n polaris -l app.kubernetes.io/name=postgres -o jsonpath='{.items[0].metadata.name}') 5432:5432 &
 ```
 
 Run the catalog bootstrap using the Polaris admin tool. This step initializes the catalog with the required configuration:
@@ -144,11 +195,13 @@ The following tools are required to run the tests:
 
 * [Helm Unit Test](https://github.com/helm-unittest/helm-unittest)
 * [Chart Testing](https://github.com/helm/chart-testing)
+* [yamllint](https://github.com/adrienverge/yamllint)
 
 Quick installation instructions for these tools:
 ```bash
 helm plugin install https://github.com/helm-unittest/helm-unittest.git
 brew install chart-testing
+brew install yamllint
 ```
 
 The integration tests also require some fixtures to be deployed. The `ci/fixtures` directory
@@ -158,7 +211,7 @@ kubectl apply --namespace polaris -f helm/polaris/ci/fixtures/
 kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=postgres --timeout=120s
 ```
 
-The `helm/polaris/ci` contains a number of values files that will be used to install the chart with
+The `helm/polaris/ci` directory contains a number of values files that will be used to install the chart with
 different configurations.
 
 ### Running the unit tests
@@ -312,6 +365,11 @@ ct install --namespace polaris --charts ./helm/polaris
 | persistence.relationalJdbc.secret.username | string | `"username"` | The secret key holding the database username for authentication |
 | persistence.type | string | `"in-memory"` | The type of persistence to use. Two built-in types are supported: in-memory and relational-jdbc. |
 | podAnnotations | object | `{}` | Annotations to apply to polaris pods. |
+| podDisruptionBudget | object | `{"annotations":{},"enabled":false,"maxUnavailable":null,"minAvailable":null}` | Pod disruption budget settings. |
+| podDisruptionBudget.annotations | object | `{}` | Annotations to add to the pod disruption budget. |
+| podDisruptionBudget.enabled | bool | `false` | Specifies whether a pod disruption budget should be created. |
+| podDisruptionBudget.maxUnavailable | string | `nil` | The maximum number of pods that can be unavailable during disruptions. Can be an absolute number (ex: 5) or a percentage of desired pods (ex: 50%). IMPORTANT: Cannot be used simultaneously with minAvailable. |
+| podDisruptionBudget.minAvailable | string | `nil` | The minimum number of pods that should remain available during disruptions. Can be an absolute number (ex: 5) or a percentage of desired pods (ex: 50%). IMPORTANT: Cannot be used simultaneously with maxUnavailable. |
 | podLabels | object | `{}` | Additional Labels to apply to polaris pods. |
 | podSecurityContext | object | `{"fsGroup":10001,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for the polaris pod. See https://kubernetes.io/docs/tasks/configure-pod-container/security-context/. |
 | podSecurityContext.fsGroup | int | `10001` | GID 10001 is compatible with Polaris OSS default images; change this if you are using a different image. |
@@ -365,6 +423,7 @@ ct install --namespace polaris --charts ./helm/polaris
 | tasks.maxConcurrentTasks | string | `nil` | The maximum number of concurrent tasks that can be executed at the same time. The default is the number of available cores. |
 | tasks.maxQueuedTasks | string | `nil` | The maximum number of tasks that can be queued up for execution. The default is Integer.MAX_VALUE. |
 | tolerations | list | `[]` | A list of tolerations to apply to polaris pods. See https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/. |
+| topologySpreadConstraints | list | `[]` | Topology spread constraints for polaris pods. See https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/#topologyspreadconstraints-field. |
 | tracing.attributes | object | `{}` | Resource attributes to identify the polaris service among other tracing sources. See https://opentelemetry.io/docs/reference/specification/resource/semantic_conventions/#service. If left empty, traces will be attached to a service named "Apache Polaris"; to change this, provide a service.name attribute here. |
 | tracing.enabled | bool | `false` | Specifies whether tracing for the polaris server should be enabled. |
 | tracing.endpoint | string | `"http://otlp-collector:4317"` | The collector endpoint URL to connect to (required). The endpoint URL must have either the http:// or the https:// scheme. The collector must talk the OpenTelemetry protocol (OTLP) and the port must be its gRPC port (by default 4317). See https://quarkus.io/guides/opentelemetry for more information. |

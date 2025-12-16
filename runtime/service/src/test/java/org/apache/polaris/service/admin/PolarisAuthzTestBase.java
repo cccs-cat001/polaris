@@ -29,13 +29,13 @@ import jakarta.annotation.Nonnull;
 import jakarta.enterprise.context.RequestScoped;
 import jakarta.enterprise.inject.Alternative;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.container.ContainerRequestContext;
 import java.io.IOException;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.Schema;
@@ -59,7 +59,6 @@ import org.apache.polaris.core.admin.model.StorageConfigInfo;
 import org.apache.polaris.core.auth.PolarisAuthorizer;
 import org.apache.polaris.core.auth.PolarisAuthorizerImpl;
 import org.apache.polaris.core.auth.PolarisPrincipal;
-import org.apache.polaris.core.config.PolarisConfigurationStore;
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.context.CallContext;
 import org.apache.polaris.core.context.RealmContext;
@@ -71,7 +70,6 @@ import org.apache.polaris.core.entity.PolarisPrivilege;
 import org.apache.polaris.core.entity.PrincipalEntity;
 import org.apache.polaris.core.entity.PrincipalRoleEntity;
 import org.apache.polaris.core.identity.provider.ServiceIdentityProvider;
-import org.apache.polaris.core.persistence.MetaStoreManagerFactory;
 import org.apache.polaris.core.persistence.PolarisMetaStoreManager;
 import org.apache.polaris.core.persistence.dao.entity.BaseResult;
 import org.apache.polaris.core.persistence.dao.entity.PrivilegeResult;
@@ -80,19 +78,19 @@ import org.apache.polaris.core.persistence.resolver.ResolutionManifestFactory;
 import org.apache.polaris.core.persistence.resolver.ResolverFactory;
 import org.apache.polaris.core.policy.PredefinedPolicyTypes;
 import org.apache.polaris.core.secrets.UserSecretsManager;
-import org.apache.polaris.core.secrets.UserSecretsManagerFactory;
 import org.apache.polaris.core.storage.cache.StorageCredentialCache;
 import org.apache.polaris.service.catalog.PolarisPassthroughResolutionView;
 import org.apache.polaris.service.catalog.Profiles;
 import org.apache.polaris.service.catalog.generic.PolarisGenericTableCatalog;
 import org.apache.polaris.service.catalog.iceberg.CatalogHandlerUtils;
 import org.apache.polaris.service.catalog.iceberg.IcebergCatalog;
-import org.apache.polaris.service.catalog.io.AccessConfigProvider;
 import org.apache.polaris.service.catalog.io.FileIOFactory;
+import org.apache.polaris.service.catalog.io.StorageAccessConfigProvider;
 import org.apache.polaris.service.catalog.policy.PolicyCatalog;
 import org.apache.polaris.service.config.ReservedProperties;
-import org.apache.polaris.service.context.catalog.CallContextCatalogFactory;
 import org.apache.polaris.service.context.catalog.PolarisCallContextCatalogFactory;
+import org.apache.polaris.service.context.catalog.RealmContextHolder;
+import org.apache.polaris.service.events.PolarisEventMetadataFactory;
 import org.apache.polaris.service.events.listeners.PolarisEventListener;
 import org.apache.polaris.service.storage.PolarisStorageIntegrationProviderImpl;
 import org.apache.polaris.service.task.TaskExecutor;
@@ -190,35 +188,32 @@ public abstract class PolarisAuthzTestBase {
           required(4, "data", Types.StringType.get()));
   protected final ReservedProperties reservedProperties = ReservedProperties.NONE;
 
-  @Inject protected MetaStoreManagerFactory managerFactory;
   @Inject protected ResolutionManifestFactory resolutionManifestFactory;
-  @Inject protected CallContextCatalogFactory callContextCatalogFactory;
-  @Inject protected UserSecretsManagerFactory userSecretsManagerFactory;
   @Inject protected ServiceIdentityProvider serviceIdentityProvider;
   @Inject protected PolarisCredentialManager credentialManager;
   @Inject protected PolarisDiagnostics diagServices;
   @Inject protected FileIOFactory fileIOFactory;
   @Inject protected PolarisEventListener polarisEventListener;
+  @Inject protected PolarisEventMetadataFactory eventMetadataFactory;
   @Inject protected CatalogHandlerUtils catalogHandlerUtils;
-  @Inject protected PolarisConfigurationStore configurationStore;
   @Inject protected StorageCredentialCache storageCredentialCache;
   @Inject protected ResolverFactory resolverFactory;
-  @Inject protected AccessConfigProvider accessConfigProvider;
+  @Inject protected StorageAccessConfigProvider storageAccessConfigProvider;
+  @Inject protected PolarisMetaStoreManager metaStoreManager;
+  @Inject protected UserSecretsManager userSecretsManager;
+  @Inject protected CallContext callContext;
+  @Inject protected RealmConfig realmConfig;
+  @Inject protected RealmContextHolder realmContextHolder;
 
   protected IcebergCatalog baseCatalog;
   protected PolarisGenericTableCatalog genericTableCatalog;
   protected PolicyCatalog policyCatalog;
   protected PolarisAdminService adminService;
-  protected PolarisMetaStoreManager metaStoreManager;
-  protected UserSecretsManager userSecretsManager;
   protected PolarisBaseEntity catalogEntity;
   protected PolarisBaseEntity federatedCatalogEntity;
   protected PrincipalEntity principalEntity;
-  protected CallContext callContext;
-  protected RealmConfig realmConfig;
   protected PolarisPrincipal authenticatedRoot;
   protected PolarisAuthorizer polarisAuthorizer;
-
   protected PolarisCallContext polarisContext;
 
   @BeforeAll
@@ -232,25 +227,21 @@ public abstract class PolarisAuthzTestBase {
     QuarkusMock.installMockForType(mock, PolarisStorageIntegrationProviderImpl.class);
   }
 
+  private static final AtomicInteger REALM_COUNTER = new AtomicInteger();
+
   @BeforeEach
   public void before(TestInfo testInfo) {
     storageCredentialCache.invalidateAll();
 
-    RealmContext realmContext = testInfo::getDisplayName;
+    var realmId =
+        testInfo.getTestMethod().orElseThrow().getName() + "_" + REALM_COUNTER.incrementAndGet();
+    RealmContext realmContext = () -> realmId;
+    realmContextHolder.set(realmContext);
+
+    bootstrapRealm(realmContext.getRealmIdentifier());
+
     QuarkusMock.installMockForType(realmContext, RealmContext.class);
-    ContainerRequestContext containerRequestContext = Mockito.mock(ContainerRequestContext.class);
-    Mockito.when(containerRequestContext.getProperty(Mockito.anyString()))
-        .thenReturn("request-id-1");
-    QuarkusMock.installMockForType(containerRequestContext, ContainerRequestContext.class);
-    metaStoreManager = managerFactory.getOrCreateMetaStoreManager(realmContext);
-    userSecretsManager = userSecretsManagerFactory.getOrCreateUserSecretsManager(realmContext);
-
-    polarisContext =
-        new PolarisCallContext(
-            realmContext, managerFactory.getOrCreateSession(realmContext), configurationStore);
-
-    callContext = polarisContext;
-    realmConfig = polarisContext.getRealmConfig();
+    polarisContext = callContext.getPolarisCallContext();
 
     polarisAuthorizer = new PolarisAuthorizerImpl(realmConfig);
 
@@ -437,6 +428,8 @@ public abstract class PolarisAuthzTestBase {
         .create();
   }
 
+  protected void bootstrapRealm(String realmIdentifier) {}
+
   @AfterEach
   public void after() {
     try {
@@ -499,9 +492,10 @@ public abstract class PolarisAuthzTestBase {
             passthroughView,
             authenticatedRoot,
             Mockito.mock(),
-            accessConfigProvider,
+            storageAccessConfigProvider,
             fileIOFactory,
-            polarisEventListener);
+            polarisEventListener,
+            eventMetadataFactory);
     this.baseCatalog.initialize(
         CATALOG_NAME,
         ImmutableMap.of(
@@ -519,7 +513,7 @@ public abstract class PolarisAuthzTestBase {
 
     @SuppressWarnings("unused") // Required by CDI
     protected TestPolarisCallContextCatalogFactory() {
-      this(null, null, null, null, null, null, null, null, null);
+      this(null, null, null, null, null, null, null, null, null, null);
     }
 
     @Inject
@@ -527,9 +521,10 @@ public abstract class PolarisAuthzTestBase {
         PolarisDiagnostics diagnostics,
         ResolverFactory resolverFactory,
         TaskExecutor taskExecutor,
-        AccessConfigProvider accessConfigProvider,
+        StorageAccessConfigProvider accessConfigProvider,
         FileIOFactory fileIOFactory,
         PolarisEventListener polarisEventListener,
+        PolarisEventMetadataFactory eventMetadataFactory,
         PolarisMetaStoreManager metaStoreManager,
         CallContext callContext,
         PolarisPrincipal principal) {
@@ -540,6 +535,7 @@ public abstract class PolarisAuthzTestBase {
           accessConfigProvider,
           fileIOFactory,
           polarisEventListener,
+          eventMetadataFactory,
           metaStoreManager,
           callContext,
           principal);

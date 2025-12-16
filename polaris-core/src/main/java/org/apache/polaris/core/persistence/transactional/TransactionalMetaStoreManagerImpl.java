@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.polaris.core.PolarisCallContext;
 import org.apache.polaris.core.PolarisDiagnostics;
+import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.FeatureConfiguration;
 import org.apache.polaris.core.entity.AsyncTaskType;
 import org.apache.polaris.core.entity.CatalogEntity;
@@ -82,9 +83,9 @@ import org.apache.polaris.core.policy.PolarisPolicyMappingRecord;
 import org.apache.polaris.core.policy.PolicyEntity;
 import org.apache.polaris.core.policy.PolicyMappingUtil;
 import org.apache.polaris.core.policy.PolicyType;
-import org.apache.polaris.core.storage.AccessConfig;
 import org.apache.polaris.core.storage.PolarisStorageConfigurationInfo;
 import org.apache.polaris.core.storage.PolarisStorageIntegration;
+import org.apache.polaris.core.storage.StorageAccessConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -113,7 +114,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
    * @param ms meta store in read/write mode
    * @param entity entity we need a new persisted record for
    */
-  protected void persistNewEntity(
+  protected PolarisBaseEntity persistNewEntity(
       @Nonnull PolarisCallContext callCtx,
       @Nonnull TransactionalPersistence ms,
       @Nonnull PolarisBaseEntity entity) {
@@ -122,6 +123,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
 
     // write it
     ms.writeEntityInCurrentTxn(callCtx, entity, true, null);
+    return entity;
   }
 
   /**
@@ -834,11 +836,9 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
             .setClientId(principalSecrets.getPrincipalClientId())
             .build();
 
-    // now create and persist new catalog entity
-    this.persistNewEntity(callCtx, ms, updatedPrincipal);
-
-    // success, return the two entities
-    return new CreatePrincipalResult(updatedPrincipal, principalSecrets);
+    // persist new principal entity and return the two entities
+    return new CreatePrincipalResult(
+        this.persistNewEntity(callCtx, ms, updatedPrincipal), principalSecrets);
   }
 
   /** {@inheritDoc} */
@@ -876,7 +876,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
 
   /** {@inheritDoc} */
   @Override
-  public @Nonnull void deletePrincipalSecrets(
+  public void deletePrincipalSecrets(
       @Nonnull PolarisCallContext callCtx, @Nonnull String clientId, long principalId) {
     // get metastore we should be using
     TransactionalPersistence ms = ((TransactionalPersistence) callCtx.getMetaStore());
@@ -1084,11 +1084,8 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
           BaseResult.ReturnStatus.ENTITY_ALREADY_EXISTS, entityActiveRecord.getSubTypeCode());
     }
 
-    // persist that new entity
-    this.persistNewEntity(callCtx, ms, entity);
-
-    // done, return that newly created entity
-    return new EntityResult(entity);
+    // persist and return that newly created entity
+    return new EntityResult(this.persistNewEntity(callCtx, ms, entity));
   }
 
   /** {@inheritDoc} */
@@ -2094,10 +2091,11 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
       @Nonnull PolarisCallContext callCtx,
       long catalogId,
       long entityId,
-      PolarisEntityType entityType,
+      @Nonnull PolarisEntityType entityType,
       boolean allowListOperation,
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
+      @Nonnull PolarisPrincipal polarisPrincipal,
       Optional<String> refreshCredentialsEndpoint) {
 
     // get meta store session we should be using
@@ -2128,14 +2126,15 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
             entityId);
 
     try {
-      AccessConfig accessConfig =
+      StorageAccessConfig storageAccessConfig =
           storageIntegration.getSubscopedCreds(
               callCtx.getRealmConfig(),
               allowListOperation,
               allowedReadLocations,
               allowedWriteLocations,
+              polarisPrincipal,
               refreshCredentialsEndpoint);
-      return new ScopedCredentialsResult(accessConfig);
+      return new ScopedCredentialsResult(storageAccessConfig);
     } catch (Exception ex) {
       return new ScopedCredentialsResult(
           BaseResult.ReturnStatus.SUBSCOPE_CREDS_ERROR, ex.getMessage());

@@ -24,7 +24,7 @@ SHELL = /usr/bin/env bash -o pipefail
 BUILD_IMAGE ?= true
 DOCKER ?= docker
 MINIKUBE_PROFILE ?= minikube
-DEPENDENCIES ?= ct helm helm-docs java21 git
+DEPENDENCIES ?= ct helm helm-docs java21 git yamllint
 OPTIONAL_DEPENDENCIES := jq kubectl minikube
 VENV_DIR := .venv
 PYTHON_CLIENT_DIR := client/python
@@ -209,7 +209,7 @@ helm-doc-generate: DEPENDENCIES := helm-docs
 helm-doc-generate: check-dependencies ## Generate Helm chart documentation
 	@echo "--- Generating Helm documentation ---"
 	@helm-docs --chart-search-root=helm
-	@cp helm/polaris/README.md site/content/in-dev/unreleased/helm.md
+	@python3 helm/polaris/tools/prepare_helm_readme.py helm/polaris/README.md site/content/in-dev/unreleased/helm.md
 	@echo "--- Helm documentation generated and copied ---"
 
 helm-unittest: DEPENDENCIES := helm
@@ -219,7 +219,7 @@ helm-unittest: check-dependencies ## Run Helm chart unittest
 	@helm unittest helm/polaris
 	@echo "--- Helm chart unittest complete ---"
 
-helm-lint: DEPENDENCIES := ct
+helm-lint: DEPENDENCIES := ct yamllint
 .PHONY: helm-lint
 helm-lint: check-dependencies ## Run Helm chart lint check
 	@echo "--- Running Helm chart linting ---"
