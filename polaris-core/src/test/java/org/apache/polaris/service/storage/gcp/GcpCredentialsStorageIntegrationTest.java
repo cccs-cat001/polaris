@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ContainerNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.api.client.http.javanet.NetHttpTransport;
@@ -52,6 +53,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.storage.BaseStorageIntegrationTest;
+import org.apache.polaris.core.storage.CredentialVendingContext;
 import org.apache.polaris.core.storage.StorageAccessConfig;
 import org.apache.polaris.core.storage.StorageAccessProperty;
 import org.apache.polaris.core.storage.gcp.GcpCredentialsStorageIntegration;
@@ -184,7 +186,8 @@ class GcpCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
         new HashSet<>(allowedReadLoc),
         new HashSet<>(allowedWriteLoc),
         PolarisPrincipal.of("principal", Map.of(), Set.of()),
-        Optional.of(REFRESH_ENDPOINT));
+        Optional.of(REFRESH_ENDPOINT),
+        CredentialVendingContext.empty());
   }
 
   private JsonNode readResource(ObjectMapper mapper, String name) throws IOException {
@@ -199,7 +202,7 @@ class GcpCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
         GcpCredentialsStorageIntegration.generateAccessBoundaryRules(
             true, Set.of("gs://bucket1/path/to/data"), Set.of("gs://bucket1/path/to/data"));
     assertThat(credentialAccessBoundary).isNotNull();
-    ObjectMapper mapper = new ObjectMapper();
+    ObjectMapper mapper = JsonMapper.builder().build();
     JsonNode parsedRules = mapper.convertValue(credentialAccessBoundary, JsonNode.class);
     JsonNode refRules = readResource(mapper, "gcp-testGenerateAccessBoundary.json");
     assertThat(parsedRules)
@@ -221,7 +224,7 @@ class GcpCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                 "gs://bucket2/a/super/path/to/data"),
             Set.of("gs://bucket1/normal/path/to/data"));
     assertThat(credentialAccessBoundary).isNotNull();
-    ObjectMapper mapper = new ObjectMapper();
+    ObjectMapper mapper = JsonMapper.builder().build();
     JsonNode parsedRules = mapper.convertValue(credentialAccessBoundary, JsonNode.class);
     JsonNode refRules =
         readResource(mapper, "gcp-testGenerateAccessBoundaryWithMultipleBuckets.json");
@@ -241,7 +244,7 @@ class GcpCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             Set.of("gs://bucket1/path/to/data", "gs://bucket1/another/path/to/data"),
             Set.of("gs://bucket1/path/to/data"));
     assertThat(credentialAccessBoundary).isNotNull();
-    ObjectMapper mapper = new ObjectMapper();
+    ObjectMapper mapper = JsonMapper.builder().build();
     JsonNode parsedRules = mapper.convertValue(credentialAccessBoundary, JsonNode.class);
     JsonNode refRules = readResource(mapper, "gcp-testGenerateAccessBoundaryWithoutList.json");
     assertThat(parsedRules)
@@ -260,7 +263,7 @@ class GcpCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             Set.of("gs://bucket1/normal/path/to/data", "gs://bucket1/awesome/path/to/data"),
             Set.of());
     assertThat(credentialAccessBoundary).isNotNull();
-    ObjectMapper mapper = new ObjectMapper();
+    ObjectMapper mapper = JsonMapper.builder().build();
     JsonNode parsedRules = mapper.convertValue(credentialAccessBoundary, JsonNode.class);
     JsonNode refRules = readResource(mapper, "gcp-testGenerateAccessBoundaryWithoutWrites.json");
     assertThat(parsedRules)
@@ -362,7 +365,9 @@ class GcpCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
         true,
         Set.of("gs://bucket/path"),
         Set.of("gs://bucket/path"),
-        Optional.empty());
+        PolarisPrincipal.of("principal", Map.of(), Set.of()),
+        Optional.empty(),
+        CredentialVendingContext.empty());
 
     Mockito.verify(mockIamClient)
         .generateAccessToken(

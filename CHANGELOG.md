@@ -59,7 +59,12 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 - Support credential vending for federated catalogs. `ALLOW_FEDERATED_CATALOGS_CREDENTIAL_VENDING` (default: true) was added to toggle this feature.
 - Enhanced catalog federation with SigV4 authentication support, additional authentication types for credential vending, and location-based access restrictions to block credential vending for remote tables outside allowed location lists.
 - Added `topologySpreadConstraints` support in Helm chart.
+- Added `priorityClassName` support in Helm chart.
 - Added support for including principal name in subscoped credentials. `INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL` (default: false) can be used to toggle this feature. If enabled, cached credentials issued to one principal will no longer be available for others.
+- Added support for [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) to the Helm Chart. 
+- Added `hierarchical` flag to `AzureStorageConfigInfo` to allow more precise SAS token down-scoping in ADLS when
+  the [hierarchical namespace](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-namespace)
+  feature is enabled in Azure.
 
 ### Changes
 
@@ -70,6 +75,7 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 - Generic Table is no longer in beta and is generally-available.
 - Added Windows support for Python client.
 - (Before/After)UpdateTableEvent is emitted for all table updates within a transaction.
+- Added KMS options to Polaris CLI
 
 ### Deprecations
 
@@ -96,7 +102,7 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 - The `ENABLE_SUB_CATALOG_RBAC_FOR_FEDERATED_CATALOGS` was added to support sub-catalog (initially namespace and table) RBAC for federated catalogs.
   The setting can be configured on a per-catalog basis by setting the catalog property: `polaris.config.enable-sub-catalog-rbac-for-federated-catalogs`.
   The realm-level feature flag `ALLOW_SETTING_SUB_CATALOG_RBAC_FOR_FEDERATED_CATALOGS` (default: true) controls whether this functionality can be enabled or modified at the catalog level.
-- Added support for S3-compatible storage that does not have STS (use `stsUavailable: true` in catalog storage configuration)
+- Added support for S3-compatible storage that does not have STS (use `stsUnavailable: true` in catalog storage configuration)
 - Python client: added support for custom realm and header
 - Python client: added support for policy management
 

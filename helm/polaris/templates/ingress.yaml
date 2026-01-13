@@ -17,6 +17,7 @@
   under the License.
 */}}
 
+{{- include "polaris.validateRouting" . }}
 {{- if .Values.ingress.enabled }}
 {{- $fullName := include "polaris.fullname" . }}
 {{- $svcPort := get (first .Values.service.ports) "port" }}

@@ -20,6 +20,7 @@ package org.apache.polaris.core.storage.gcp;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.auth.http.HttpTransportFactory;
 import com.google.auth.oauth2.AccessToken;
@@ -49,6 +50,7 @@ import java.util.Set;
 import java.util.stream.Stream;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.RealmConfig;
+import org.apache.polaris.core.storage.CredentialVendingContext;
 import org.apache.polaris.core.storage.InMemoryStorageIntegration;
 import org.apache.polaris.core.storage.PolarisStorageIntegration;
 import org.apache.polaris.core.storage.StorageAccessConfig;
@@ -68,6 +70,8 @@ public class GcpCredentialsStorageIntegration
   public static final String SERVICE_ACCOUNT_PREFIX = "projects/-/serviceAccounts/";
   public static final String IMPERSONATION_SCOPE =
       "https://www.googleapis.com/auth/devstorage.read_write";
+
+  private static final ObjectMapper OBJECT_MAPPER = JsonMapper.builder().build();
 
   private final GoogleCredentials sourceCredentials;
   private final HttpTransportFactory transportFactory;
@@ -91,7 +95,10 @@ public class GcpCredentialsStorageIntegration
       @Nonnull Set<String> allowedReadLocations,
       @Nonnull Set<String> allowedWriteLocations,
       @Nonnull PolarisPrincipal polarisPrincipal,
-      Optional<String> refreshCredentialsEndpoint) {
+      Optional<String> refreshCredentialsEndpoint,
+      @Nonnull CredentialVendingContext credentialVendingContext) {
+    // Note: GCP downscoped credentials do not support session tags like AWS STS.
+    // The credentialVendingContext is accepted for interface compatibility but not used.
     try {
       sourceCredentials.refresh();
     } catch (IOException e) {
@@ -181,7 +188,7 @@ public class GcpCredentialsStorageIntegration
 
   private String convertToString(CredentialAccessBoundary accessBoundary) {
     try {
-      return new ObjectMapper().writeValueAsString(accessBoundary);
+      return OBJECT_MAPPER.writeValueAsString(accessBoundary);
     } catch (JsonProcessingException e) {
       LOGGER.warn("Unable to convert access boundary to json", e);
       return Objects.toString(accessBoundary);
