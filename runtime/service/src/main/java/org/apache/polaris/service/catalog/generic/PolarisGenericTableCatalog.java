@@ -18,17 +18,18 @@
  */
 package org.apache.polaris.service.catalog.generic;
 
+import static java.util.Objects.requireNonNull;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.alreadyExistsExceptionForTableLikeEntity;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.noSuchNamespaceException;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.notFoundExceptionForTableLikeEntity;
+
 import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
-import org.apache.iceberg.exceptions.AlreadyExistsException;
-import org.apache.iceberg.exceptions.NoSuchNamespaceException;
-import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.polaris.core.catalog.GenericTableCatalog;
 import org.apache.polaris.core.catalog.PolarisCatalogHelpers;
 import org.apache.polaris.core.context.CallContext;
-import org.apache.polaris.core.entity.CatalogEntity;
 import org.apache.polaris.core.entity.PolarisEntity;
 import org.apache.polaris.core.entity.PolarisEntitySubType;
 import org.apache.polaris.core.entity.PolarisEntityType;
@@ -46,28 +47,25 @@ import org.slf4j.LoggerFactory;
 public class PolarisGenericTableCatalog implements GenericTableCatalog {
   private static final Logger LOGGER = LoggerFactory.getLogger(PolarisGenericTableCatalog.class);
 
-  private String name;
-
   private final CallContext callContext;
   private final PolarisResolutionManifestCatalogView resolvedEntityView;
-  private final CatalogEntity catalogEntity;
-  private long catalogId = -1;
-  private PolarisMetaStoreManager metaStoreManager;
+  private final long catalogId;
+  private final PolarisMetaStoreManager metaStoreManager;
 
   public PolarisGenericTableCatalog(
       PolarisMetaStoreManager metaStoreManager,
       CallContext callContext,
       PolarisResolutionManifestCatalogView resolvedEntityView) {
     this.callContext = callContext;
-    this.resolvedEntityView = resolvedEntityView;
-    this.catalogEntity = resolvedEntityView.getResolvedCatalogEntity();
-    this.catalogId = catalogEntity.getId();
+    this.resolvedEntityView = requireNonNull(resolvedEntityView, "No resolved entity view");
+    this.catalogId =
+        requireNonNull(resolvedEntityView.getResolvedCatalogEntity(), "No resolved catalog entity")
+            .getId();
     this.metaStoreManager = metaStoreManager;
   }
 
   @Override
   public void initialize(String name, Map<String, String> properties) {
-    this.name = name;
     if (!properties.isEmpty()) {
       throw new IllegalStateException("PolarisGenericTableCatalog does not support properties");
     }
@@ -111,8 +109,7 @@ public class PolarisGenericTableCatalog implements GenericTableCatalog {
               .setCreateTimestamp(System.currentTimeMillis())
               .build();
     } else {
-      throw new AlreadyExistsException(
-          "Iceberg table, view, or generic table already exists: %s", tableIdentifier);
+      throw alreadyExistsExceptionForTableLikeEntity(tableIdentifier, entity.getSubType());
     }
 
     EntityResult res =
@@ -121,17 +118,14 @@ public class PolarisGenericTableCatalog implements GenericTableCatalog {
             PolarisEntity.toCoreList(catalogPath),
             entity);
     if (!res.isSuccess()) {
-      switch (res.getReturnStatus()) {
-        case BaseResult.ReturnStatus.ENTITY_ALREADY_EXISTS:
-          throw new AlreadyExistsException(
-              "Iceberg table, view, or generic table already exists: %s", tableIdentifier);
-
-        default:
-          throw new IllegalStateException(
-              String.format(
-                  "Unknown error status for identifier %s: %s with extraInfo: %s",
-                  tableIdentifier, res.getReturnStatus(), res.getExtraInformation()));
+      if (requireNonNull(res.getReturnStatus()) == BaseResult.ReturnStatus.ENTITY_ALREADY_EXISTS) {
+        throw alreadyExistsExceptionForTableLikeEntity(
+            tableIdentifier, res.getAlreadyExistsEntitySubType());
       }
+      throw new IllegalStateException(
+          String.format(
+              "Unknown error status for identifier %s: %s with extraInfo: %s",
+              tableIdentifier, res.getReturnStatus(), res.getExtraInformation()));
     }
     GenericTableEntity resultEntity = GenericTableEntity.of(res.getEntity());
     LOGGER.debug(
@@ -148,7 +142,8 @@ public class PolarisGenericTableCatalog implements GenericTableCatalog {
         GenericTableEntity.of(
             resolvedEntities == null ? null : resolvedEntities.getRawLeafEntity());
     if (null == entity) {
-      throw new NoSuchTableException("Generic table does not exist: %s", tableIdentifier);
+      throw notFoundExceptionForTableLikeEntity(
+          tableIdentifier, PolarisEntitySubType.GENERIC_TABLE);
     } else {
       return entity;
     }
@@ -161,7 +156,8 @@ public class PolarisGenericTableCatalog implements GenericTableCatalog {
             tableIdentifier, PolarisEntityType.TABLE_LIKE, PolarisEntitySubType.GENERIC_TABLE);
 
     if (resolvedEntities == null) {
-      throw new NoSuchTableException("Generic table does not exist: %s", tableIdentifier);
+      throw notFoundExceptionForTableLikeEntity(
+          tableIdentifier, PolarisEntitySubType.GENERIC_TABLE);
     }
 
     List<PolarisEntity> catalogPath = resolvedEntities.getRawParentPath();
@@ -182,7 +178,7 @@ public class PolarisGenericTableCatalog implements GenericTableCatalog {
   public List<TableIdentifier> listGenericTables(Namespace namespace) {
     PolarisResolvedPathWrapper resolvedEntities = resolvedEntityView.getResolvedPath(namespace);
     if (resolvedEntities == null) {
-      throw new NoSuchNamespaceException("Namespace '%s' does not exist", namespace);
+      throw noSuchNamespaceException(namespace);
     }
 
     List<PolarisEntity> catalogPath = resolvedEntities.getRawFullPath();

@@ -69,12 +69,16 @@ tasks.named<RatTask>("rat").configure {
 
   // Files copied from Docsy (ASLv2 licensed) don't have header
   excludes.add("site/layouts/docs/baseof.html")
+  excludes.add("site/layouts/guides/baseof.html")
   excludes.add("site/layouts/shortcodes/redoc-polaris.html")
   excludes.add("site/layouts/community/list.html")
   excludes.add("site/layouts/partials/navbar.html")
   excludes.add("site/layouts/partials/head.html")
   excludes.add("site/layouts/partials/community_links.html")
   excludes.add("layouts/partials/head.html")
+
+  // Hugo render hook - HTML comments would appear in rendered output
+  excludes.add("site/layouts/_default/_markup/render-heading.html")
 
   // Files copied from OpenAPI Generator (ASLv2 licensed) don't have header
   excludes.add("server-templates/*.mustache")
@@ -110,10 +114,13 @@ tasks.named<RatTask>("rat").configure {
   excludes.add("site/resources/_gen/**")
   excludes.add("node_modules/**")
 
+  // Guides testing
+  excludes.add("/getting-started") // it's a symlink
+
   // Python
   excludes.add("**/.venv/**")
   excludes.add("**/polaris-venv/**")
-  excludes.add("**/poetry.lock")
+  excludes.add("**/uv.lock")
   excludes.add("**/.ruff_cache/**")
   excludes.add("**/.mypy_cache/**")
   excludes.add("**/.pytest_cache/**")
@@ -243,5 +250,19 @@ tasks.register("showVersion") {
     logger.lifecycle(
       "Polaris version is ${project.file("version.txt").readText(Charsets.UTF_8).trim()}"
     )
+  }
+}
+
+tasks.named<Wrapper>("wrapper") {
+  actions.addLast {
+    val script = scriptFile.readText()
+    val scriptLines = script.lines().toMutableList()
+
+    val insertAtLine =
+      scriptLines.indexOf("# Use the maximum available, or set MAX_FD != -1 to use that value.")
+    scriptLines.add(insertAtLine, "")
+    scriptLines.add(insertAtLine, $$". \"${APP_HOME}/gradle/gradlew-include.sh\"")
+
+    scriptFile.writeText(scriptLines.joinToString("\n"))
   }
 }

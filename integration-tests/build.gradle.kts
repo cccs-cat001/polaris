@@ -50,13 +50,15 @@ dependencies {
 
   implementation("org.apache.iceberg:iceberg-spark-3.5_2.12")
   implementation("org.apache.iceberg:iceberg-spark-extensions-3.5_2.12")
-  implementation("org.apache.spark:spark-sql_2.12:3.5.7") {
+  implementation("org.apache.spark:spark-sql_2.12:3.5.8") {
     // exclude log4j dependencies
     exclude("org.apache.logging.log4j", "log4j-slf4j2-impl")
     exclude("org.apache.logging.log4j", "log4j-api")
     exclude("org.apache.logging.log4j", "log4j-1.2-api")
     exclude("org.slf4j", "jul-to-slf4j")
   }
+
+  implementation(libs.jakarta.ws.rs.api)
 
   implementation(platform(libs.junit.bom))
   implementation("org.junit.jupiter:junit-jupiter")
@@ -68,6 +70,7 @@ dependencies {
   implementation(libs.s3mock.testcontainers)
   implementation(project(":polaris-runtime-test-common"))
   implementation(project(":polaris-minio-testcontainer"))
+  implementation(project(":polaris-rustfs-testcontainer"))
 }
 
 copiedCodeChecks {

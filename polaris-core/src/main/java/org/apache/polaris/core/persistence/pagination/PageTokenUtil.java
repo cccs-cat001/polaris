@@ -67,10 +67,9 @@ final class PageTokenUtil {
 
         @Override
         public boolean equals(Object obj) {
-          if (!(obj instanceof PageToken)) {
+          if (!(obj instanceof PageToken other)) {
             return false;
           }
-          PageToken other = (PageToken) obj;
           return other.pageSize().isEmpty() && other.value().isEmpty();
         }
 
@@ -99,10 +98,9 @@ final class PageTokenUtil {
 
       @Override
       public boolean equals(Object obj) {
-        if (!(obj instanceof PageToken)) {
+        if (!(obj instanceof PageToken other)) {
           return false;
         }
-        PageToken other = (PageToken) obj;
         return other.pageSize().equals(pageSize()) && other.value().isEmpty();
       }
 
@@ -123,7 +121,9 @@ final class PageTokenUtil {
       @Nullable String requestedPageToken,
       @Nullable Integer requestedPageSize,
       BooleanSupplier shouldDecodeToken) {
-    if (requestedPageToken != null && shouldDecodeToken.getAsBoolean()) {
+    if (requestedPageToken != null
+        && !requestedPageToken.isEmpty()
+        && shouldDecodeToken.getAsBoolean()) {
       var bytes = Base64.getUrlDecoder().decode(requestedPageToken);
       try {
         var pageToken = SMILE_MAPPER.readValue(bytes, PageToken.class);
@@ -240,8 +240,8 @@ final class PageTokenUtil {
     }
 
     private String getId(Object value) {
-      if (value instanceof Token) {
-        return ((Token) value).getT();
+      if (value instanceof Token token) {
+        return token.getT();
       }
 
       return null;

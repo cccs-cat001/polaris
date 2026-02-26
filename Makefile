@@ -21,6 +21,7 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 ## Variables
+PYTHON ?= python3
 BUILD_IMAGE ?= true
 DOCKER ?= docker
 MINIKUBE_PROFILE ?= minikube
@@ -33,7 +34,7 @@ ACTIVATE_AND_CD = source $(VENV_DIR)/bin/activate && cd $(PYTHON_CLIENT_DIR)
 ## Version information
 BUILD_VERSION := $(shell cat version.txt)
 GIT_COMMIT := $(shell git rev-parse HEAD)
-POETRY_VERSION := $(shell cat client/python/pyproject.toml | grep requires-poetry | sed 's/requires-poetry *= *"\(.*\)"/\1/')
+UV_VERSION := $(shell cat client/python/pyproject.toml | grep -A1 tool.uv | grep -v tool.uv | grep required-version | sed 's/required-version *= *"\([^"]*\)".*/\1/')
 
 ##@ General
 
@@ -45,25 +46,12 @@ help: ## Display this help
 version: ## Display version information
 	@echo "Build version: ${BUILD_VERSION}"
 	@echo "Git commit: ${GIT_COMMIT}"
-	@echo "Poetry version: ${POETRY_VERSION}"
+	@echo "UV version: ${UV_VERSION}"
 
 ##@ Polaris Build
 
 .PHONY: build
 build: build-server build-admin ## Build Polaris server, admin, and container images
-
-build-server: DEPENDENCIES := java21 $(DOCKER)
-.PHONY: build-server
-build-server: check-dependencies ## Build Polaris server and container image
-	@echo "--- Building Polaris server ---"
-	@./gradlew \
-		--info \
-		-Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
-		:polaris-server:assemble \
-		:polaris-server:quarkusAppPartsBuild --rerun \
-		-Dquarkus.container-image.build=$(BUILD_IMAGE) \
-		-Dquarkus.docker.executable-name=$(DOCKER)
-	@echo "--- Polaris server build complete ---"
 
 build-admin: DEPENDENCIES := java21 $(DOCKER)
 .PHONY: build-admin
@@ -75,6 +63,24 @@ build-admin: check-dependencies ## Build Polaris admin and container image
 		-Dquarkus.container-image.build=$(BUILD_IMAGE) \
 		-Dquarkus.docker.executable-name=$(DOCKER)
 	@echo "--- Polaris admin build complete ---"
+
+build-cleanup: DEPENDENCIES := java21
+.PHONY: build-cleanup
+build-cleanup: check-dependencies ## Clean build artifacts
+	@echo "--- Cleaning up build artifacts ---"
+	@./gradlew clean
+	@echo "--- Build artifacts cleaned ---"
+
+build-server: DEPENDENCIES := java21 $(DOCKER)
+.PHONY: build-server
+build-server: check-dependencies ## Build Polaris server and container image
+	@echo "--- Building Polaris server ---"
+	@./gradlew \
+		:polaris-server:assemble \
+		:polaris-server:quarkusAppPartsBuild --rerun \
+		-Dquarkus.container-image.build=$(BUILD_IMAGE) \
+		-Dquarkus.docker.executable-name=$(DOCKER)
+	@echo "--- Polaris server build complete ---"
 
 build-spark-plugin-3.5-2.12: DEPENDENCIES := java21
 .PHONY: build-spark-plugin-3.5-2.12
@@ -92,13 +98,6 @@ build-spark-plugin-3.5-2.13: check-dependencies ## Build Spark plugin v3.5 with 
 		:polaris-spark-3.5_2.13:assemble
 	@echo "--- Spark plugin v3.5 with Scala v2.13 build complete ---"
 
-build-cleanup: DEPENDENCIES := java21
-.PHONY: build-cleanup
-build-cleanup: check-dependencies ## Clean build artifacts
-	@echo "--- Cleaning up build artifacts ---"
-	@./gradlew clean
-	@echo "--- Build artifacts cleaned ---"
-
 spotless-apply: DEPENDENCIES := java21
 .PHONY: spotless-apply
 spotless-apply: check-dependencies ## Apply code formatting using Spotless Gradle plugin.
@@ -111,64 +110,21 @@ spotless-apply: check-dependencies ## Apply code formatting using Spotless Gradl
 # Target to create the virtual environment directory
 $(VENV_DIR):
 	@echo "Setting up Python virtual environment at $(VENV_DIR)..."
-	@python3 -m venv $(VENV_DIR)
+	@$(PYTHON) -m venv $(VENV_DIR)
 	@echo "Virtual environment created."
 
 .PHONY: client-install-dependencies
 client-install-dependencies: $(VENV_DIR)
-	@echo "Installing Poetry and project dependencies into $(VENV_DIR)..."
+	@echo "Installing UV and project dependencies into $(VENV_DIR)..."
 	@$(VENV_DIR)/bin/pip install --upgrade pip
-	@if [ ! -f "$(VENV_DIR)/bin/poetry" ]; then \
-		$(VENV_DIR)/bin/pip install --upgrade "poetry$(POETRY_VERSION)"; \
+	@if [ ! -f "$(VENV_DIR)/bin/uv" ]; then \
+		$(VENV_DIR)/bin/pip install --upgrade "uv$(UV_VERSION)"; \
 	fi
-	@$(ACTIVATE_AND_CD) && poetry lock && poetry install --all-extras
-	@echo "Poetry and dependencies installed."
+	@$(ACTIVATE_AND_CD) && uv lock && uv sync --active --all-extras
+	@echo "uv and dependencies installed."
 
 .PHONY: client-setup-env
 client-setup-env: $(VENV_DIR) client-install-dependencies
-
-.PHONY: client-lint
-client-lint: client-setup-env ## Run linting checks for Polaris client
-	@echo "--- Running client linting checks ---"
-	@$(ACTIVATE_AND_CD) && poetry run pre-commit run --files integration_tests/* generate_clients.py apache_polaris/cli/* apache_polaris/cli/command/* apache_polaris/cli/options/* test/*
-	@echo "--- Client linting checks complete ---"
-
-.PHONY: client-regenerate
-client-regenerate: client-setup-env ## Regenerate the client code
-	@echo "--- Regenerating client code ---"
-	@$(ACTIVATE_AND_CD) && python3 -B generate_clients.py
-	@echo "--- Client code regeneration complete ---"
-
-.PHONY: client-unit-test
-client-unit-test: client-setup-env ## Run client unit tests
-	@echo "--- Running client unit tests ---"
-	@$(ACTIVATE_AND_CD) && poetry run pytest test/
-	@echo "--- Client unit tests complete ---"
-
-.PHONY: client-integration-test
-client-integration-test: build-server client-setup-env ## Run client integration tests
-	@echo "--- Starting client integration tests ---"
-	@echo "Ensuring Docker Compose services are stopped and removed..."
-	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml kill || true # `|| true` prevents make from failing if containers don't exist
-	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml rm -f || true # `|| true` prevents make from failing if containers don't exist
-	@echo "Bringing up Docker Compose services in detached mode..."
-	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml up -d
-	@echo "Waiting for Polaris HTTP health check to pass..."
-	@until curl -s -f http://localhost:8182/q/health > /dev/null; do \
-		echo "Still waiting for HTTP 200 from /q/health (sleeping 2s)..."; \
-		sleep 2; \
-	done
-	@echo "Polaris is healthy. Starting integration tests..."
-	@$(ACTIVATE_AND_CD) && poetry run pytest integration_tests/
-	@echo "--- Client integration tests complete ---"
-	@echo "Tearing down Docker Compose services..."
-	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml down || true # Ensure teardown even if tests fail
-
-.PHONY: client-license-check
-client-license-check: client-setup-env ## Run license compliance check
-	@echo "--- Starting license compliance check ---"
-	@$(ACTIVATE_AND_CD) && pip-licenses
-	@echo "--- License compliance check complete ---"
 
 .PHONY: client-build
 client-build: client-setup-env ## Build client distribution. Pass FORMAT=sdist or FORMAT=wheel to build a specific format.
@@ -179,13 +135,12 @@ client-build: client-setup-env ## Build client distribution. Pass FORMAT=sdist o
 			exit 1; \
 		fi; \
 		echo "Building with format: $(FORMAT)"; \
-		$(ACTIVATE_AND_CD) && poetry build --format $(FORMAT); \
+		$(ACTIVATE_AND_CD) && uv build --format $(FORMAT); \
 	else \
 		echo "Building default distribution (sdist and wheel)"; \
-		$(ACTIVATE_AND_CD) && poetry build; \
+		$(ACTIVATE_AND_CD) && uv build; \
 	fi
 	@echo "--- Client distribution build complete ---"
-
 
 .PHONY: client-cleanup
 client-cleanup: ## Cleanup virtual environment and Python cache files
@@ -202,31 +157,193 @@ client-cleanup: ## Cleanup virtual environment and Python cache files
 	@find $(PYTHON_CLIENT_DIR) -type d -name "__pycache__" -delete
 	@echo "--- Virtual environment and Python cache cleanup complete ---"
 
+.PHONY: client-integration-test
+client-integration-test: build-server client-setup-env ## Run client integration tests
+	@echo "--- Starting client integration tests ---"
+	@echo "Ensuring Docker Compose services are stopped and removed..."
+	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml kill || true # `|| true` prevents make from failing if containers don't exist
+	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml rm -f || true # `|| true` prevents make from failing if containers don't exist
+	@echo "Bringing up Docker Compose services in detached mode..."
+	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml up -d
+	@echo "Waiting for Polaris HTTP health check to pass..."
+	@until curl -s -f http://localhost:8182/q/health > /dev/null; do \
+		echo "Still waiting for HTTP 200 from /q/health (sleeping 2s)..."; \
+		sleep 2; \
+	done
+	@echo "Polaris is healthy. Starting integration tests..."
+	@$(ACTIVATE_AND_CD) && uv run --active pytest integration_tests/
+	@echo "--- Client integration tests complete ---"
+	@echo "Tearing down Docker Compose services..."
+	@$(DOCKER) compose -f $(PYTHON_CLIENT_DIR)/docker-compose.yml down || true # Ensure teardown even if tests fail
+
+.PHONY: client-license-check
+client-license-check: client-setup-env ## Run license compliance check
+	@echo "--- Starting license compliance check ---"
+	@$(ACTIVATE_AND_CD) && pip-licenses
+	@echo "--- License compliance check complete ---"
+
+.PHONY: client-lint
+client-lint: client-setup-env ## Run linting checks for Polaris client
+	@echo "--- Running client linting checks ---"
+	@$(ACTIVATE_AND_CD) && uv run --active pre-commit run --files integration_tests/* generate_clients.py apache_polaris/cli/* apache_polaris/cli/command/* apache_polaris/cli/options/* test/*
+	@echo "--- Client linting checks complete ---"
+
+.PHONY: client-nightly-publish
+client-nightly-publish: client-setup-env ## Build and publish nightly version to Test PyPI
+	@echo "--- Starting nightly publish ---"
+	@$(ACTIVATE_AND_CD) && \
+	CURRENT_VERSION=$$(uv version --short) && \
+	DATE_SUFFIX=$$(date -u +%Y%m%d%H%M%S) && \
+	NIGHTLY_VERSION="$${CURRENT_VERSION}.dev$${DATE_SUFFIX}" && \
+	echo "Publishing nightly version: $${NIGHTLY_VERSION}" && \
+	uv version "$${NIGHTLY_VERSION}" && \
+	uv build --clear && \
+	uv publish --index testpypi
+	@echo "--- Nightly publish complete ---"
+
+.PHONY: client-regenerate
+client-regenerate: client-setup-env ## Regenerate the client code
+	@echo "--- Regenerating client code ---"
+	@$(ACTIVATE_AND_CD) && $(PYTHON) -B generate_clients.py
+	@echo "--- Client code regeneration complete ---"
+
+.PHONY: client-unit-test
+client-unit-test: client-setup-env ## Run client unit tests
+	@echo "--- Running client unit tests ---"
+	@$(ACTIVATE_AND_CD) && uv run --active pytest test/
+	@echo "--- Client unit tests complete ---"
+
 ##@ Helm
+
+.PHONY: helm
+helm: helm-schema-generate helm-doc-generate helm-lint helm-unittest ## Run all Helm targets (schema, docs, unittest, lint)
 
 helm-doc-generate: DEPENDENCIES := helm-docs
 .PHONY: helm-doc-generate
 helm-doc-generate: check-dependencies ## Generate Helm chart documentation
 	@echo "--- Generating Helm documentation ---"
-	@helm-docs --chart-search-root=helm
-	@python3 helm/polaris/tools/prepare_helm_readme.py helm/polaris/README.md site/content/in-dev/unreleased/helm.md
+	@helm-docs --chart-search-root=helm \
+       --template-files site/content/in-dev/unreleased/helm-chart/reference.md.gotmpl \
+       --output-file ../../site/content/in-dev/unreleased/helm-chart/reference.md \
+       --sort-values-order=file
 	@echo "--- Helm documentation generated and copied ---"
 
-helm-unittest: DEPENDENCIES := helm
-.PHONY: helm-unittest
-helm-unittest: check-dependencies ## Run Helm chart unittest
-	@echo "--- Running Helm chart unittest ---"
-	@helm unittest helm/polaris
-	@echo "--- Helm chart unittest complete ---"
+helm-doc-verify: DEPENDENCIES := helm-docs git
+.PHONY: helm-doc-verify
+helm-doc-verify: helm-doc-generate ## Verify Helm chart documentation is up to date
+	@echo "--- Verifying Helm documentation is up to date ---"
+	@if ! git diff --exit-code site/content/in-dev/unreleased/helm-chart/reference.md; then \
+		echo "ERROR: Helm documentation is out of date. Please run 'make helm-doc-generate' and commit the changes."; \
+		exit 1; \
+	fi
+	@echo "--- Helm documentation is up to date ---"
+
+helm-install-plugins: DEPENDENCIES := helm
+.PHONY: helm-install-plugins
+helm-install-plugins: check-dependencies ## Install required Helm plugins (unittest, schema)
+	@echo "--- Installing Helm plugins ---"
+	@HELM_MAJOR_VERSION=$$(helm version --short | sed 's/^v//' | cut -d. -f1); \
+	if [ "$$HELM_MAJOR_VERSION" -ge 4 ] 2>/dev/null; then \
+		HELM_PLUGIN_FLAGS="--verify=false"; \
+	else \
+		HELM_PLUGIN_FLAGS=""; \
+	fi; \
+	if helm plugin list | grep -q "^unittest"; then \
+		echo "Plugin 'unittest' is already installed."; \
+	else \
+		echo "Installing 'unittest' plugin..."; \
+		helm plugin install $$HELM_PLUGIN_FLAGS https://github.com/helm-unittest/helm-unittest.git; \
+	fi; \
+	if helm plugin list | grep -q "^schema"; then \
+		echo "Plugin 'schema' is already installed."; \
+	else \
+		echo "Installing 'schema' plugin..."; \
+		helm plugin install $$HELM_PLUGIN_FLAGS https://github.com/losisin/helm-values-schema-json.git; \
+	fi
+	@echo "--- Helm plugins installed ---"
 
 helm-lint: DEPENDENCIES := ct yamllint
 .PHONY: helm-lint
 helm-lint: check-dependencies ## Run Helm chart lint check
 	@echo "--- Running Helm chart linting ---"
-	@ct lint --charts helm/polaris
+	@ct lint --charts helm/polaris --validate-maintainers=false
 	@echo "--- Helm chart linting complete ---"
 
+helm-schema-generate: DEPENDENCIES := helm
+.PHONY: helm-schema-generate
+helm-schema-generate: helm-install-plugins ## Generate Helm chart JSON schema from values.yaml
+	@echo "--- Generating Helm values schema ---"
+	@helm schema -f helm/polaris/values.yaml -o helm/polaris/values.schema.json --use-helm-docs --draft 7
+	@echo "--- Helm values schema generated ---"
+
+helm-schema-verify: DEPENDENCIES := helm git
+.PHONY: helm-schema-verify
+helm-schema-verify: helm-schema-generate ## Verify Helm chart JSON schema is up to date
+	@echo "--- Verifying Helm values schema is up to date ---"
+	@if ! git diff --exit-code helm/polaris/values.schema.json; then \
+		echo "ERROR: Helm schema is out of date. Please run 'make helm-schema-generate' and commit the changes."; \
+		exit 1; \
+	fi
+	@echo "--- Helm values schema is up to date ---"
+
+helm-unittest: DEPENDENCIES := helm
+.PHONY: helm-unittest
+helm-unittest: helm-install-plugins ## Run Helm chart unittest
+	@echo "--- Running Helm chart unittest ---"
+	@helm unittest helm/polaris
+	@echo "--- Helm chart unittest complete ---"
+
+helm-fixtures: DEPENDENCIES := kubectl
+.PHONY: helm-fixtures
+helm-fixtures: check-dependencies ## Create namespace and deploy fixtures for Helm chart testing
+	@echo "--- Creating namespace and deploying fixtures ---"
+	@kubectl create namespace polaris --dry-run=client -o yaml | kubectl apply -f -
+	@kubectl apply --namespace polaris -f helm/polaris/ci/fixtures/
+	@echo "--- Waiting for database pods to be ready ---"
+	@kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=postgres --timeout=120s
+	@kubectl wait --namespace polaris --for=condition=ready pod --selector=app.kubernetes.io/name=mongodb --timeout=120s
+	@echo "--- Fixtures deployed and ready ---"
+
+helm-fixtures-cleanup: DEPENDENCIES := kubectl
+.PHONY: helm-fixtures-cleanup
+helm-fixtures-cleanup: check-dependencies ## Remove fixtures and namespace for Helm chart testing
+	@echo "--- Removing fixtures and namespace ---"
+	@kubectl delete namespace polaris --wait=true --ignore-not-found
+	@echo "--- Fixtures and namespace removed ---"
+
+helm-integration-test: DEPENDENCIES := ct
+.PHONY: helm-integration-test
+helm-integration-test: build minikube-load-images helm-fixtures check-dependencies ## Run Helm chart integration tests
+	@echo "--- Running Helm chart integration tests ---"
+	@ct install --namespace polaris --charts ./helm/polaris
+	@echo "--- Helm chart integration tests complete ---"
+
+.PHONY: helm
+helm: helm-schema-generate helm-doc-generate helm-lint helm-unittest ## Run most Helm targets (schema, docs, unittest, lint) excluding integration tests
+
 ##@ Minikube
+
+minikube-cleanup: DEPENDENCIES := minikube $(DOCKER)
+.PHONY: minikube-cleanup
+minikube-cleanup: check-dependencies ## Cleanup the Minikube cluster
+	@echo "--- Checking Minikube cluster status ---"
+	@if minikube status -p $(MINIKUBE_PROFILE) >/dev/null 2>&1; then \
+		echo "--- Cleanup Minikube cluster ---"; \
+		minikube delete -p $(MINIKUBE_PROFILE); \
+		echo "--- Minikube cluster removed ---"; \
+	else \
+		echo "--- Minikube cluster does not exist. Skipping cleanup ---"; \
+	fi
+
+minikube-load-images: DEPENDENCIES := minikube $(DOCKER)
+.PHONY: minikube-load-images
+minikube-load-images: minikube-start-cluster check-dependencies ## Load local Docker images into the Minikube cluster
+	@echo "--- Loading images into Minikube cluster ---"
+	@minikube image load -p $(MINIKUBE_PROFILE) docker.io/apache/polaris:latest
+	@minikube image tag -p $(MINIKUBE_PROFILE) docker.io/apache/polaris:latest docker.io/apache/polaris:$(BUILD_VERSION)
+	@minikube image load -p $(MINIKUBE_PROFILE) docker.io/apache/polaris-admin-tool:latest
+	@minikube image tag -p $(MINIKUBE_PROFILE) docker.io/apache/polaris-admin-tool:latest docker.io/apache/polaris-admin-tool:$(BUILD_VERSION)
+	@echo "--- Images loaded into Minikube cluster ---"
 
 minikube-start-cluster: DEPENDENCIES := minikube $(DOCKER)
 .PHONY: minikube-start-cluster
@@ -256,27 +373,6 @@ minikube-stop-cluster: check-dependencies ## Stop the Minikube cluster
 		echo "--- Minikube cluster is already stopped or does not exist. Skipping stop ---"; \
 	fi
 
-minikube-load-images: DEPENDENCIES := minikube $(DOCKER)
-.PHONY: minikube-load-images
-minikube-load-images: minikube-start-cluster check-dependencies ## Load local Docker images into the Minikube cluster
-	@echo "--- Loading images into Minikube cluster ---"
-	@minikube image load -p $(MINIKUBE_PROFILE) docker.io/apache/polaris:latest
-	@minikube image tag -p $(MINIKUBE_PROFILE) docker.io/apache/polaris:latest docker.io/apache/polaris:$(BUILD_VERSION)
-	@minikube image load -p $(MINIKUBE_PROFILE) docker.io/apache/polaris-admin-tool:latest
-	@minikube image tag -p $(MINIKUBE_PROFILE) docker.io/apache/polaris-admin-tool:latest docker.io/apache/polaris-admin-tool:$(BUILD_VERSION)
-	@echo "--- Images loaded into Minikube cluster ---"
-
-minikube-cleanup: DEPENDENCIES := minikube $(DOCKER)
-.PHONY: minikube-cleanup
-minikube-cleanup: check-dependencies ## Cleanup the Minikube cluster
-	@echo "--- Checking Minikube cluster status ---"
-	@if minikube status -p $(MINIKUBE_PROFILE) >/dev/null 2>&1; then \
-		echo "--- Cleanup Minikube cluster ---"; \
-		minikube delete -p $(MINIKUBE_PROFILE); \
-		echo "--- Minikube cluster removed ---"; \
-	else \
-		echo "--- Minikube cluster does not exist. Skipping cleanup ---"; \
-	fi
 
 ##@ Pre-commit
 

@@ -20,10 +20,11 @@ package org.apache.polaris.service.catalog.policy;
 
 import static org.apache.polaris.core.persistence.dao.entity.BaseResult.ReturnStatus.POLICY_HAS_MAPPINGS;
 import static org.apache.polaris.core.persistence.dao.entity.BaseResult.ReturnStatus.POLICY_MAPPING_OF_SAME_TYPE_ALREADY_EXISTS;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.noSuchNamespaceException;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.notFoundExceptionForTableLikeEntity;
 import static org.apache.polaris.service.types.PolicyAttachmentTarget.TypeEnum.CATALOG;
 
 import com.google.common.base.Strings;
-import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,8 +40,6 @@ import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.BadRequestException;
-import org.apache.iceberg.exceptions.NoSuchNamespaceException;
-import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.polaris.core.context.CallContext;
 import org.apache.polaris.core.entity.CatalogEntity;
 import org.apache.polaris.core.entity.PolarisEntity;
@@ -92,7 +91,7 @@ public class PolicyCatalog {
   public Policy createPolicy(
       PolicyIdentifier policyIdentifier, String type, String description, String content) {
     PolarisResolvedPathWrapper resolvedParent =
-        resolvedEntityView.getResolvedPath(policyIdentifier.getNamespace());
+        resolvedEntityView.getResolvedPath(policyIdentifier.namespace());
     if (resolvedParent == null) {
       // Illegal state because the namespace should've already been in the static resolution set.
       throw new IllegalStateException(
@@ -119,8 +118,7 @@ public class PolicyCatalog {
     }
 
     entity =
-        new PolicyEntity.Builder(
-                policyIdentifier.getNamespace(), policyIdentifier.getName(), policyType)
+        new PolicyEntity.Builder(policyIdentifier.namespace(), policyIdentifier.name(), policyType)
             .setCatalogId(catalogId)
             .setParentId(resolvedParent.getRawLeafEntity().getId())
             .setDescription(description)
@@ -180,10 +178,7 @@ public class PolicyCatalog {
       return listEntitiesResult.getEntities().stream()
           .map(
               entity ->
-                  PolicyIdentifier.builder()
-                      .setNamespace(namespace)
-                      .setName(entity.getName())
-                      .build())
+                  PolicyIdentifier.builder().namespace(namespace).name(entity.getName()).build())
           .toList();
     }
     // with a policyType filter we need to load the full PolicyEntity to apply the filter
@@ -198,10 +193,7 @@ public class PolicyCatalog {
         .filter(policyEntity -> policyEntity.getPolicyType() == policyType)
         .map(
             entity ->
-                PolicyIdentifier.builder()
-                    .setNamespace(namespace)
-                    .setName(entity.getName())
-                    .build())
+                PolicyIdentifier.builder().namespace(namespace).name(entity.getName()).build())
         .toList();
   }
 
@@ -299,7 +291,7 @@ public class PolicyCatalog {
     var policyCatalogPath = PolarisEntity.toCoreList(resolvedPolicyPath.getRawParentPath());
     var policyEntity = PolicyEntity.of(resolvedPolicyPath.getRawLeafEntity());
 
-    var resolvedTargetPath = getResolvedPathWrapper(target);
+    var resolvedTargetPath = PolicyCatalogUtils.getResolvedPathWrapper(resolvedEntityView, target);
     var targetCatalogPath = PolarisEntity.toCoreList(resolvedTargetPath.getRawParentPath());
     var targetEntity = resolvedTargetPath.getRawLeafEntity();
 
@@ -335,7 +327,7 @@ public class PolicyCatalog {
     var policyCatalogPath = PolarisEntity.toCoreList(resolvedPolicyPath.getRawParentPath());
     var policyEntity = PolicyEntity.of(resolvedPolicyPath.getRawLeafEntity());
 
-    var resolvedTargetPath = getResolvedPathWrapper(target);
+    var resolvedTargetPath = PolicyCatalogUtils.getResolvedPathWrapper(resolvedEntityView, target);
     var targetCatalogPath = PolarisEntity.toCoreList(resolvedTargetPath.getRawParentPath());
     var targetEntity = resolvedTargetPath.getRawLeafEntity();
 
@@ -456,7 +448,7 @@ public class PolicyCatalog {
       // namespace
       var resolvedTargetEntity = resolvedEntityView.getResolvedPath(namespace);
       if (resolvedTargetEntity == null) {
-        throw new NoSuchNamespaceException("Namespace does not exist: %s", namespace);
+        throw noSuchNamespaceException(namespace);
       }
       return resolvedTargetEntity.getRawFullPath();
     } else {
@@ -467,7 +459,8 @@ public class PolicyCatalog {
           resolvedEntityView.getResolvedPath(
               tableIdentifier, PolarisEntityType.TABLE_LIKE, PolarisEntitySubType.ICEBERG_TABLE);
       if (resolvedTableEntity == null) {
-        throw new NoSuchTableException("Iceberg Table does not exist: %s", tableIdentifier);
+        throw notFoundExceptionForTableLikeEntity(
+            tableIdentifier, PolarisEntitySubType.ICEBERG_TABLE);
       }
       return resolvedTableEntity.getRawFullPath();
     }
@@ -490,34 +483,6 @@ public class PolicyCatalog {
       throw new NoSuchPolicyException(String.format("Policy does not exist: %s", policyIdentifier));
     }
     return resolvedEntities;
-  }
-
-  private PolarisResolvedPathWrapper getResolvedPathWrapper(
-      @Nonnull PolicyAttachmentTarget target) {
-    return switch (target.getType()) {
-      // get the current catalog entity, since policy cannot apply across catalog at this moment
-      case CATALOG -> resolvedEntityView.getResolvedReferenceCatalogEntity();
-      case NAMESPACE -> {
-        var namespace = Namespace.of(target.getPath().toArray(new String[0]));
-        var resolvedTargetEntity = resolvedEntityView.getResolvedPath(namespace);
-        if (resolvedTargetEntity == null) {
-          throw new NoSuchNamespaceException("Namespace does not exist: %s", namespace);
-        }
-        yield resolvedTargetEntity;
-      }
-      case TABLE_LIKE -> {
-        var tableIdentifier = TableIdentifier.of(target.getPath().toArray(new String[0]));
-        // only Iceberg tables are supported
-        var resolvedTableEntity =
-            resolvedEntityView.getResolvedPath(
-                tableIdentifier, PolarisEntityType.TABLE_LIKE, PolarisEntitySubType.ICEBERG_TABLE);
-        if (resolvedTableEntity == null) {
-          throw new NoSuchTableException("Iceberg Table does not exist: %s", tableIdentifier);
-        }
-        yield resolvedTableEntity;
-      }
-      default -> throw new IllegalArgumentException("Unsupported target type: " + target.getType());
-    };
   }
 
   private static Policy constructPolicy(PolicyEntity policyEntity) {

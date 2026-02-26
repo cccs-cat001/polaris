@@ -221,6 +221,11 @@ class OptionTree:
                                 Hints.Catalogs.Create.STS_UNAVAILABLE,
                             ),
                             Argument(
+                                Arguments.KMS_UNAVAILABLE,
+                                bool,
+                                Hints.Catalogs.Create.KMS_UNAVAILABLE,
+                            ),
+                            Argument(
                                 Arguments.PATH_STYLE_ACCESS,
                                 bool,
                                 Hints.Catalogs.Create.PATH_STYLE_ACCESS,
@@ -262,6 +267,11 @@ class OptionTree:
                                 Arguments.MULTI_TENANT_APP_NAME,
                                 str,
                                 Hints.Catalogs.Create.MULTI_TENANT_APP_NAME,
+                            ),
+                            Argument(
+                                Arguments.HIERARCHICAL,
+                                bool,
+                                Hints.Catalogs.Create.HIERARCHICAL,
                             ),
                             Argument(
                                 Arguments.CONSENT_URL,

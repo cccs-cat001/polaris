@@ -91,17 +91,52 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
           .defaultValue(false)
           .buildFeatureConfiguration();
 
-  public static final FeatureConfiguration<Boolean> INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL =
-      PolarisConfiguration.<Boolean>builder()
-          .key("INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL")
+  /**
+   * The set of fields that are supported as AWS STS session tag labels in credential vending.
+   *
+   * <p>Supported values:
+   *
+   * <ul>
+   *   <li>{@code realm} - The realm identifier for the request
+   *   <li>{@code catalog} - The name of the catalog vending credentials
+   *   <li>{@code namespace} - The namespace being accessed (dot-separated)
+   *   <li>{@code table} - The table name being accessed
+   *   <li>{@code principal} - The principal name requesting credentials
+   *   <li>{@code roles} - Comma-separated list of activated principal roles
+   *   <li>{@code trace_id} - OpenTelemetry trace ID (WARNING: disables credential caching)
+   * </ul>
+   */
+  public static final List<String> SUPPORTED_SESSION_TAG_FIELDS =
+      List.<String>of("realm", "catalog", "namespace", "table", "principal", "roles", "trace_id");
+
+  /**
+   * The config name for the trace ID session tag field. Included as a constant because callers need
+   * to check for its presence specifically — enabling it populates the trace ID into the credential
+   * vending context, which effectively eliminates credential cache reuse since each request has a
+   * unique trace ID.
+   */
+  public static final String SESSION_TAG_FIELD_TRACE_ID = "trace_id";
+
+  public static final FeatureConfiguration<List<String>> SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL =
+      PolarisConfiguration.<List<String>>builder()
+          .key("SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL")
           .description(
-              "If set to true, session tags (catalog, namespace, table, principal, roles) will be included\n"
-                  + "in AWS STS AssumeRole requests for credential vending. These tags appear in CloudTrail events,\n"
-                  + "enabling correlation between catalog operations and S3 data access.\n"
+              "A comma-separated list of fields to include as session tags in AWS STS AssumeRole requests\n"
+                  + "for credential vending. These tags appear in CloudTrail events, enabling correlation between\n"
+                  + "catalog operations and S3 data access. An empty list (default) disables session tags entirely.\n"
                   + "Requires the IAM role trust policy to allow sts:TagSession action.\n"
-                  + "Note that enabling this feature may lead to degradation in temporary credential caching as \n"
-                  + "catalog will no longer be able to reuse credentials for different tables/namespaces/roles.")
-          .defaultValue(false)
+                  + "\n"
+                  + "Supported fields: "
+                  + String.join(", ", SUPPORTED_SESSION_TAG_FIELDS)
+                  + "\n"
+                  + "\n"
+                  + "Note: each additional field may contribute to AWS STS packed policy size (max 2048 characters).\n"
+                  + "Fields with long values (e.g. deeply nested namespaces) can cause STS policy size limit errors.\n"
+                  + "Choose only the fields needed for your CloudTrail correlation requirements.\n"
+                  + "\n"
+                  + "WARNING: Including 'trace_id' effectively eliminates credential cache reuse because every\n"
+                  + "request has a unique trace ID. This may significantly increase latency and STS API costs.")
+          .defaultValue(List.<String>of())
           .buildFeatureConfiguration();
 
   public static final FeatureConfiguration<Boolean> ALLOW_SETTING_S3_ENDPOINTS =
@@ -114,12 +149,11 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
           .defaultValue(true)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> ALLOW_TABLE_LOCATION_OVERLAP =
       PolarisConfiguration.<Boolean>builder()
           .key("ALLOW_TABLE_LOCATION_OVERLAP")
           .catalogConfig("polaris.config.allow.overlapping.table.location")
-          .catalogConfigUnsafe("allow.overlapping.table.location")
+          .legacyCatalogConfig("allow.overlapping.table.location")
           .description(
               "If set to true, allow one table's location to reside within another table's location. "
                   + "This is only enforced within a given namespace.")
@@ -150,43 +184,48 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
           .defaultValue(false)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> ALLOW_UNSTRUCTURED_TABLE_LOCATION =
       PolarisConfiguration.<Boolean>builder()
           .key("ALLOW_UNSTRUCTURED_TABLE_LOCATION")
           .catalogConfig("polaris.config.allow.unstructured.table.location")
-          .catalogConfigUnsafe("allow.unstructured.table.location")
+          .legacyCatalogConfig("allow.unstructured.table.location")
           .description("If set to true, allows unstructured table locations.")
           .defaultValue(false)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> ALLOW_EXTERNAL_TABLE_LOCATION =
       PolarisConfiguration.<Boolean>builder()
           .key("ALLOW_EXTERNAL_TABLE_LOCATION")
           .catalogConfig("polaris.config.allow.external.table.location")
-          .catalogConfigUnsafe("allow.external.table.location")
+          .legacyCatalogConfig("allow.external.table.location")
           .description(
               "If set to true, allows tables to have external locations outside the default structure.")
           .defaultValue(false)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> ALLOW_EXTERNAL_CATALOG_CREDENTIAL_VENDING =
       PolarisConfiguration.<Boolean>builder()
           .key("ALLOW_EXTERNAL_CATALOG_CREDENTIAL_VENDING")
           .catalogConfig("polaris.config.enable.credential.vending")
-          .catalogConfigUnsafe("enable.credential.vending")
+          .legacyCatalogConfig("enable.credential.vending")
           .description("If set to true, allow credential vending for external catalogs.")
           .defaultValue(true)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
+  public static final FeatureConfiguration<Boolean> ALLOW_WILDCARD_LOCATION =
+      PolarisConfiguration.<Boolean>builder()
+          .key("ALLOW_WILDCARD_LOCATION")
+          .description(
+              "Indicates whether asterisks ('*') in configuration values defining allowed"
+                  + " storage locations are processed as meaning 'any location'.")
+          .defaultValue(false)
+          .buildFeatureConfiguration();
+
   public static final FeatureConfiguration<List<String>> SUPPORTED_CATALOG_STORAGE_TYPES =
       PolarisConfiguration.<List<String>>builder()
           .key("SUPPORTED_CATALOG_STORAGE_TYPES")
           .catalogConfig("polaris.config.supported.storage.types")
-          .catalogConfigUnsafe("supported.storage.types")
+          .legacyCatalogConfig("supported.storage.types")
           .description("The list of supported storage types for a catalog")
           .defaultValue(
               List.of(
@@ -195,32 +234,29 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
                   StorageConfigInfo.StorageTypeEnum.GCS.name()))
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> CLEANUP_ON_NAMESPACE_DROP =
       PolarisConfiguration.<Boolean>builder()
           .key("CLEANUP_ON_NAMESPACE_DROP")
           .catalogConfig("polaris.config.cleanup.on.namespace.drop")
-          .catalogConfigUnsafe("cleanup.on.namespace.drop")
+          .legacyCatalogConfig("cleanup.on.namespace.drop")
           .description("If set to true, clean up data when a namespace is dropped")
           .defaultValue(false)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> CLEANUP_ON_CATALOG_DROP =
       PolarisConfiguration.<Boolean>builder()
           .key("CLEANUP_ON_CATALOG_DROP")
           .catalogConfig("polaris.config.cleanup.on.catalog.drop")
-          .catalogConfigUnsafe("cleanup.on.catalog.drop")
+          .legacyCatalogConfig("cleanup.on.catalog.drop")
           .description("If set to true, clean up data when a catalog is dropped")
           .defaultValue(false)
           .buildFeatureConfiguration();
 
-  @SuppressWarnings("deprecation")
   public static final FeatureConfiguration<Boolean> DROP_WITH_PURGE_ENABLED =
       PolarisConfiguration.<Boolean>builder()
           .key("DROP_WITH_PURGE_ENABLED")
           .catalogConfig("polaris.config.drop-with-purge.enabled")
-          .catalogConfigUnsafe("drop-with-purge.enabled")
+          .legacyCatalogConfig("drop-with-purge.enabled")
           .description(
               "If set to true, allows tables to be dropped with the purge parameter set to true.")
           .defaultValue(false)
@@ -233,6 +269,14 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
           .description(
               "If set to true, Polaris will attempt to delete view metadata files when a view is dropped.")
           .defaultValue(true)
+          .buildFeatureConfiguration();
+
+  public static final FeatureConfiguration<Long> POLARIS_TASK_TIMEOUT_MILLIS =
+      PolarisConfiguration.<Long>builder()
+          .key("POLARIS_TASK_TIMEOUT_MILLIS")
+          .description(
+              "Polaris task expiry timeout (milliseconds). Older unfinished tasks may not be processed.")
+          .defaultValue(300_000L)
           .buildFeatureConfiguration();
 
   public static final FeatureConfiguration<Integer> STORAGE_CREDENTIAL_DURATION_SECONDS =
@@ -501,5 +545,22 @@ public class FeatureConfiguration<T> extends PolarisConfiguration<T> {
                   + "For example, 0.5 means up to 50%% random jitter will be added to each retry delay. "
                   + "Helps prevent thundering herd when multiple requests fail simultaneously.")
           .defaultValue(0.5)
+          .buildFeatureConfiguration();
+
+  public static final FeatureConfiguration<Integer> TABLE_METADATA_CLEANUP_BATCH_SIZE =
+      PolarisConfiguration.<Integer>builder()
+          .key("TABLE_METADATA_CLEANUP_BATCH_SIZE")
+          .description("Metadata batch size for tasks that clean up dropped tables' files.")
+          .defaultValue(10)
+          .buildFeatureConfiguration();
+
+  public static final FeatureConfiguration<Boolean> RESOLVE_CREDENTIALS_BY_STORAGE_NAME =
+      PolarisConfiguration.<Boolean>builder()
+          .key("RESOLVE_CREDENTIALS_BY_STORAGE_NAME")
+          .description(
+              "If set to true, resolve AWS credentials based on the storageName field "
+                  + "of the storage configuration. "
+                  + "When disabled, the default AWS credentials are used for all storages.")
+          .defaultValue(false)
           .buildFeatureConfiguration();
 }

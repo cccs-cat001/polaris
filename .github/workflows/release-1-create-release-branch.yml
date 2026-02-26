@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without RC number (e.g., 1.0.0-incubating)'
+        description: 'Release version without RC number (e.g., 1.0.0)'
         required: true
         type: string
       dry_run:
@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           # Fetch full history for proper branch operations
           fetch-depth: 0
@@ -81,7 +81,7 @@ jobs:
 
           # Validate version format and extract components
           if ! validate_and_extract_polaris_version "${version}"; then
-            echo "❌ Invalid version format. Expected: major.minor.patch-incubating, got: ${version}" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Invalid version format. Expected: major.minor.patch, got: ${version}" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
 

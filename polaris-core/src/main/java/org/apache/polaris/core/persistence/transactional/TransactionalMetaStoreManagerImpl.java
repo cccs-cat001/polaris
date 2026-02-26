@@ -53,7 +53,6 @@ import org.apache.polaris.core.entity.PolarisPrincipalSecrets;
 import org.apache.polaris.core.entity.PolarisPrivilege;
 import org.apache.polaris.core.entity.PolarisTaskConstants;
 import org.apache.polaris.core.entity.PrincipalEntity;
-import org.apache.polaris.core.entity.PrincipalRoleEntity;
 import org.apache.polaris.core.persistence.BaseMetaStoreManager;
 import org.apache.polaris.core.persistence.PolarisMetaStoreManager;
 import org.apache.polaris.core.persistence.PolarisObjectMapperUtil;
@@ -532,78 +531,6 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
 
     // success, return the two entities
     return new CreateCatalogResult(catalog, adminRole);
-  }
-
-  /**
-   * Bootstrap Polaris catalog service
-   *
-   * @param callCtx call context
-   * @param ms meta store in read/write mode
-   */
-  private void bootstrapPolarisService(
-      @Nonnull PolarisCallContext callCtx, @Nonnull TransactionalPersistence ms) {
-
-    // Create a root container entity that can represent the securable for any top-level grants.
-    PolarisBaseEntity rootContainer =
-        new PolarisBaseEntity(
-            PolarisEntityConstants.getNullId(),
-            PolarisEntityConstants.getRootEntityId(),
-            PolarisEntityType.ROOT,
-            PolarisEntitySubType.NULL_SUBTYPE,
-            PolarisEntityConstants.getRootEntityId(),
-            PolarisEntityConstants.getRootContainerName());
-    this.persistNewEntity(callCtx, ms, rootContainer);
-
-    // Now bootstrap the service by creating the root principal and the service_admin principal
-    // role. The principal role will be granted to that root principal and the root catalog admin
-    // of the root catalog will be granted to that principal role.
-    long rootPrincipalId = ms.generateNewIdInCurrentTxn(callCtx);
-    PrincipalEntity rootPrincipal =
-        new PrincipalEntity.Builder()
-            .setId(rootPrincipalId)
-            .setName(PolarisEntityConstants.getRootPrincipalName())
-            .setCreateTimestamp(System.currentTimeMillis())
-            .build();
-    this.createPrincipal(callCtx, ms, rootPrincipal);
-
-    // now create the account admin principal role
-    long serviceAdminPrincipalRoleId = ms.generateNewIdInCurrentTxn(callCtx);
-    PrincipalRoleEntity serviceAdminPrincipalRole =
-        new PrincipalRoleEntity.Builder()
-            .setId(serviceAdminPrincipalRoleId)
-            .setName(PolarisEntityConstants.getNameOfPrincipalServiceAdminRole())
-            .setCreateTimestamp(System.currentTimeMillis())
-            .build();
-    this.persistNewEntity(callCtx, ms, serviceAdminPrincipalRole);
-
-    // we also need to grant usage on the account-admin principal to the principal
-    this.persistNewGrantRecord(
-        callCtx,
-        ms,
-        serviceAdminPrincipalRole,
-        rootPrincipal,
-        PolarisPrivilege.PRINCIPAL_ROLE_USAGE);
-
-    // grant SERVICE_MANAGE_ACCESS on the rootContainer to the serviceAdminPrincipalRole
-    this.persistNewGrantRecord(
-        callCtx,
-        ms,
-        rootContainer,
-        serviceAdminPrincipalRole,
-        PolarisPrivilege.SERVICE_MANAGE_ACCESS);
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  public @Nonnull BaseResult bootstrapPolarisService(@Nonnull PolarisCallContext callCtx) {
-    // get meta store we should be using
-    TransactionalPersistence ms = ((TransactionalPersistence) callCtx.getMetaStore());
-
-    // run operation in a read/write transaction
-    ms.runActionInTransaction(callCtx, () -> this.bootstrapPolarisService(callCtx, ms));
-
-    // all good
-    return new BaseResult(BaseResult.ReturnStatus.SUCCESS);
   }
 
   @Override
@@ -1217,7 +1144,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
       // update that entity, abort if it fails
       EntityResult updatedEntityResult =
           this.updateEntityPropertiesIfNotChanged(
-              callCtx, ms, entityWithPath.getCatalogPath(), entityWithPath.getEntity());
+              callCtx, ms, entityWithPath.catalogPath(), entityWithPath.entity());
 
       // if failed, rollback and return the last error
       if (updatedEntityResult.getReturnStatus() != BaseResult.ReturnStatus.SUCCESS) {
@@ -2033,9 +1960,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
               long taskAgeTimeout =
                   callCtx
                       .getRealmConfig()
-                      .getConfig(
-                          PolarisTaskConstants.TASK_TIMEOUT_MILLIS_CONFIG,
-                          PolarisTaskConstants.TASK_TIMEOUT_MILLIS);
+                      .getConfig(FeatureConfiguration.POLARIS_TASK_TIMEOUT_MILLIS);
               return taskState == null
                   || taskState.executor == null
                   || clock.millis() - taskState.lastAttemptStartTime > taskAgeTimeout;
@@ -2372,7 +2297,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
 
     // load the entity if something changed
     final PolarisBaseEntity entity;
-    if (entityVersion != entityVersions.getEntityVersion()) {
+    if (entityVersion != entityVersions.entityVersion()) {
       entity =
           ms.lookupEntityInCurrentTxn(callCtx, entityCatalogId, entityId, entityType.getCode());
 
@@ -2387,7 +2312,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
 
     // load the grant records if required
     final List<PolarisGrantRecord> grantRecords;
-    if (entityVersions.getGrantRecordsVersion() != entityGrantRecordsVersion) {
+    if (entityVersions.grantRecordsVersion() != entityGrantRecordsVersion) {
       if (entityType.isGrantee()) {
         grantRecords =
             new ArrayList<>(
@@ -2403,7 +2328,7 @@ public class TransactionalMetaStoreManagerImpl extends BaseMetaStoreManager {
     }
 
     // return the result
-    return new ResolvedEntityResult(entity, entityVersions.getGrantRecordsVersion(), grantRecords);
+    return new ResolvedEntityResult(entity, entityVersions.grantRecordsVersion(), grantRecords);
   }
 
   /** {@inheritDoc} */

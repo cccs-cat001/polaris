@@ -23,8 +23,6 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.GoogleCredentials;
-import jakarta.annotation.Nonnull;
-import jakarta.annotation.Nullable;
 import jakarta.enterprise.inject.Instance;
 import jakarta.ws.rs.core.SecurityContext;
 import java.security.Principal;
@@ -41,8 +39,8 @@ import org.apache.polaris.core.PolarisDiagnostics;
 import org.apache.polaris.core.auth.PolarisAuthorizer;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.catalog.ExternalCatalogFactory;
-import org.apache.polaris.core.config.PolarisConfigurationStore;
 import org.apache.polaris.core.config.RealmConfig;
+import org.apache.polaris.core.config.RealmConfigurationSource;
 import org.apache.polaris.core.context.CallContext;
 import org.apache.polaris.core.context.RealmContext;
 import org.apache.polaris.core.credentials.PolarisCredentialManager;
@@ -73,8 +71,11 @@ import org.apache.polaris.service.catalog.api.IcebergRestConfigurationApi;
 import org.apache.polaris.service.catalog.api.IcebergRestConfigurationApiService;
 import org.apache.polaris.service.catalog.iceberg.CatalogHandlerUtils;
 import org.apache.polaris.service.catalog.iceberg.IcebergCatalogAdapter;
+import org.apache.polaris.service.catalog.iceberg.IcebergCatalogHandler;
+import org.apache.polaris.service.catalog.iceberg.IcebergCatalogHandlerFactory;
 import org.apache.polaris.service.catalog.iceberg.IcebergRestCatalogEventServiceDelegator;
 import org.apache.polaris.service.catalog.iceberg.IcebergRestConfigurationEventServiceDelegator;
+import org.apache.polaris.service.catalog.iceberg.ImmutableIcebergCatalogHandler;
 import org.apache.polaris.service.catalog.io.FileIOFactory;
 import org.apache.polaris.service.catalog.io.MeasuredFileIOFactory;
 import org.apache.polaris.service.catalog.io.StorageAccessConfigProvider;
@@ -83,6 +84,7 @@ import org.apache.polaris.service.context.catalog.CallContextCatalogFactory;
 import org.apache.polaris.service.context.catalog.PolarisCallContextCatalogFactory;
 import org.apache.polaris.service.credentials.DefaultPolarisCredentialManager;
 import org.apache.polaris.service.credentials.connection.SigV4ConnectionCredentialVendor;
+import org.apache.polaris.service.events.EventAttributeMap;
 import org.apache.polaris.service.events.PolarisEventMetadata;
 import org.apache.polaris.service.events.PolarisEventMetadataFactory;
 import org.apache.polaris.service.events.listeners.PolarisEventListener;
@@ -105,7 +107,7 @@ public record TestServices(
     IcebergRestCatalogApi restApi,
     IcebergRestConfigurationApi restConfigurationApi,
     IcebergCatalogAdapter catalogAdapter,
-    PolarisConfigurationStore configurationStore,
+    RealmConfigurationSource configurationSource,
     PolarisDiagnostics polarisDiagnostics,
     StorageCredentialCache storageCredentialCache,
     ResolverFactory resolverFactory,
@@ -124,21 +126,6 @@ public record TestServices(
 
   private static final RealmContext TEST_REALM = () -> "test-realm";
   private static final String GCP_ACCESS_TOKEN = "abc";
-
-  private static class MockedConfigurationStore implements PolarisConfigurationStore {
-    private final Map<String, Object> defaults;
-
-    public MockedConfigurationStore(Map<String, Object> defaults) {
-      this.defaults = Map.copyOf(defaults);
-    }
-
-    @Override
-    public <T> @Nullable T getConfiguration(@Nonnull RealmContext realmContext, String configName) {
-      @SuppressWarnings("unchecked")
-      T confgValue = (T) defaults.get(configName);
-      return confgValue;
-    }
-  }
 
   public static Builder builder() {
     return new Builder();
@@ -207,7 +194,7 @@ public record TestServices(
     }
 
     public TestServices build() {
-      PolarisConfigurationStore configurationStore = new MockedConfigurationStore(config);
+      RealmConfigurationSource configurationSource = (rc, name) -> config.get(name);
       PolarisAuthorizer authorizer = Mockito.mock(PolarisAuthorizer.class);
 
       // Application level
@@ -229,7 +216,7 @@ public record TestServices(
 
       BasePersistence metaStoreSession = metaStoreManagerFactory.getOrCreateSession(realmContext);
       CallContext callContext =
-          new PolarisCallContext(realmContext, metaStoreSession, configurationStore);
+          new PolarisCallContext(realmContext, metaStoreSession, configurationSource);
       RealmConfig realmConfig = callContext.getRealmConfig();
 
       PolarisMetaStoreManager metaStoreManager =
@@ -306,7 +293,7 @@ public record TestServices(
           new StorageCredentialsVendor(metaStoreManager, callContext);
       StorageAccessConfigProvider storageAccessConfigProvider =
           new StorageAccessConfigProvider(
-              storageCredentialCache, storageCredentialsVendor, principal);
+              storageCredentialCache, storageCredentialsVendor, principal, realmContext);
       FileIOFactory fileIOFactory = fileIOFactorySupplier.get();
 
       TaskExecutor taskExecutor = Mockito.mock(TaskExecutor.class);
@@ -334,23 +321,39 @@ public record TestServices(
       Mockito.when(externalCatalogFactory.select(any())).thenReturn(externalCatalogFactory);
       Mockito.when(externalCatalogFactory.isUnsatisfied()).thenReturn(true);
 
+      EventAttributeMap eventAttributeMap = new EventAttributeMap();
+
+      IcebergCatalogHandlerFactory handlerFactory =
+          new IcebergCatalogHandlerFactory() {
+            @Override
+            public IcebergCatalogHandler createHandler(
+                String catalogName, PolarisPrincipal principal) {
+              return ImmutableIcebergCatalogHandler.builder()
+                  .catalogName(catalogName)
+                  .polarisPrincipal(principal)
+                  .diagnostics(diagnostics)
+                  .callContext(callContext)
+                  .prefixParser(new DefaultCatalogPrefixParser())
+                  .resolverFactory(resolverFactory)
+                  .resolutionManifestFactory(resolutionManifestFactory)
+                  .metaStoreManager(metaStoreManager)
+                  .credentialManager(credentialManager)
+                  .catalogFactory(callContextFactory)
+                  .authorizer(authorizer)
+                  .reservedProperties(reservedProperties)
+                  .catalogHandlerUtils(catalogHandlerUtils)
+                  .externalCatalogFactories(externalCatalogFactory)
+                  .storageAccessConfigProvider(storageAccessConfigProvider)
+                  .eventAttributeMap(eventAttributeMap)
+                  .metricsReporter(new DefaultMetricsReporter())
+                  .clock(clock)
+                  .build();
+            }
+          };
+
       IcebergCatalogAdapter catalogService =
           new IcebergCatalogAdapter(
-              diagnostics,
-              realmContext,
-              callContext,
-              callContextFactory,
-              resolverFactory,
-              resolutionManifestFactory,
-              metaStoreManager,
-              credentialManager,
-              authorizer,
-              new DefaultCatalogPrefixParser(),
-              reservedProperties,
-              catalogHandlerUtils,
-              externalCatalogFactory,
-              storageAccessConfigProvider,
-              new DefaultMetricsReporter());
+              callContext, new DefaultCatalogPrefixParser(), reservedProperties, handlerFactory);
 
       // Optionally wrap with event delegator
       IcebergRestCatalogApiService finalRestCatalogService = catalogService;
@@ -361,7 +364,8 @@ public record TestServices(
                 catalogService,
                 polarisEventListener,
                 eventMetadataFactory,
-                new DefaultCatalogPrefixParser());
+                new DefaultCatalogPrefixParser(),
+                eventAttributeMap);
         finalRestConfigurationService =
             new IcebergRestConfigurationEventServiceDelegator(
                 catalogService, polarisEventListener, eventMetadataFactory);
@@ -392,7 +396,7 @@ public record TestServices(
           restApi,
           restConfigurationApi,
           catalogService,
-          configurationStore,
+          configurationSource,
           diagnostics,
           storageCredentialCache,
           resolverFactory,
@@ -413,6 +417,6 @@ public record TestServices(
 
   public PolarisCallContext newCallContext() {
     BasePersistence metaStore = metaStoreManagerFactory.getOrCreateSession(realmContext);
-    return new PolarisCallContext(realmContext, metaStore, configurationStore);
+    return new PolarisCallContext(realmContext, metaStore, configurationSource);
   }
 }

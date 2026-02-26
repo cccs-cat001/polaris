@@ -18,6 +18,11 @@
  */
 package org.apache.polaris.service.catalog.iceberg;
 
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.alreadyExistsExceptionForTableLikeEntity;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.alreadyExistsExceptionWithSameNameForTableLikeEntity;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.entityNameForSubType;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.noSuchNamespaceException;
+import static org.apache.polaris.service.catalog.common.ExceptionUtils.notFoundExceptionForTableLikeEntity;
 import static org.apache.polaris.service.exception.IcebergExceptionMapper.isStorageProviderRetryableException;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -81,6 +86,8 @@ import org.apache.iceberg.util.LocationUtil;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.Tasks;
 import org.apache.iceberg.view.BaseMetastoreViewCatalog;
+import org.apache.iceberg.view.BaseView;
+import org.apache.iceberg.view.View;
 import org.apache.iceberg.view.ViewBuilder;
 import org.apache.iceberg.view.ViewMetadata;
 import org.apache.iceberg.view.ViewMetadataParser;
@@ -130,7 +137,7 @@ import org.apache.polaris.service.catalog.io.FileIOFactory;
 import org.apache.polaris.service.catalog.io.FileIOUtil;
 import org.apache.polaris.service.catalog.io.StorageAccessConfigProvider;
 import org.apache.polaris.service.catalog.validation.IcebergPropertiesValidation;
-import org.apache.polaris.service.events.AttributeMap;
+import org.apache.polaris.service.events.EventAttributeMap;
 import org.apache.polaris.service.events.EventAttributes;
 import org.apache.polaris.service.events.PolarisEvent;
 import org.apache.polaris.service.events.PolarisEventMetadataFactory;
@@ -181,11 +188,11 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
   private Map<String, String> tableDefaultProperties;
 
   private final String catalogName;
-  private long catalogId = -1;
+  private final long catalogId;
   private String defaultBaseLocation;
   private Map<String, String> catalogProperties;
   private final StorageAccessConfigProvider storageAccessConfigProvider;
-  private FileIOFactory fileIOFactory;
+  private final FileIOFactory fileIOFactory;
   private PolarisMetaStoreManager metaStoreManager;
 
   /**
@@ -299,7 +306,8 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
 
     // Throw an exception if this table already exists in the catalog.
     if (tableExists(identifier)) {
-      throw new AlreadyExistsException("Table already exists: %s", identifier);
+      throw alreadyExistsExceptionForTableLikeEntity(
+          identifier, PolarisEntitySubType.ICEBERG_TABLE);
     }
 
     String locationDir = metadataFileLocation.substring(0, lastSlashIndex);
@@ -362,8 +370,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       PolarisResolvedPathWrapper resolvedNamespace =
           resolvedEntityView.getResolvedPath(tableIdentifier.namespace());
       if (resolvedNamespace == null) {
-        throw new NoSuchNamespaceException(
-            "Namespace does not exist: %s", tableIdentifier.namespace());
+        throw noSuchNamespaceException(tableIdentifier.namespace());
       }
       List<PolarisEntity> namespacePath = resolvedNamespace.getRawFullPath();
       String namespaceLocation = resolveLocationForPath(diagnostics, namespacePath);
@@ -421,7 +428,22 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
         dropTableLike(
             PolarisEntitySubType.ICEBERG_TABLE, tableIdentifier, storageProperties, purge);
     if (!dropEntityResult.isSuccess()) {
-      return false;
+      switch (dropEntityResult.getReturnStatus()) {
+        case BaseResult.ReturnStatus.ENTITY_NOT_FOUND:
+          return false;
+
+        case BaseResult.ReturnStatus.ENTITY_UNDROPPABLE:
+          throw new ForbiddenException(
+              "Table %s cannot be dropped: %s",
+              tableIdentifier, dropEntityResult.getExtraInformation());
+
+        default:
+          throw new ServiceFailureException(
+              "Failed to drop table %s, status=%s, extraInfo=%s",
+              tableIdentifier,
+              dropEntityResult.getReturnStatus(),
+              dropEntityResult.getExtraInformation());
+      }
     }
 
     if (purge && lastMetadata != null && dropEntityResult.getCleanupTaskId() != null) {
@@ -646,12 +668,25 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
                 Map.of(),
                 realmConfig.getConfig(FeatureConfiguration.CLEANUP_ON_NAMESPACE_DROP));
 
-    if (!dropEntityResult.isSuccess() && dropEntityResult.failedBecauseNotEmpty()) {
-      throw new NamespaceNotEmptyException("Namespace %s is not empty", namespace);
+    if (!dropEntityResult.isSuccess()) {
+      switch (dropEntityResult.getReturnStatus()) {
+        case BaseResult.ReturnStatus.NAMESPACE_NOT_EMPTY:
+        case BaseResult.ReturnStatus.CATALOG_NOT_EMPTY:
+          throw new NamespaceNotEmptyException("Namespace %s is not empty", namespace);
+
+        case BaseResult.ReturnStatus.ENTITY_NOT_FOUND:
+          return false;
+
+        default:
+          throw new ServiceFailureException(
+              "Failed to drop namespace %s, status=%s, extraInfo=%s",
+              namespace,
+              dropEntityResult.getReturnStatus(),
+              dropEntityResult.getExtraInformation());
+      }
     }
 
-    // return status of drop operation
-    return dropEntityResult.isSuccess();
+    return true;
   }
 
   @Override
@@ -659,7 +694,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       throws NoSuchNamespaceException {
     PolarisResolvedPathWrapper resolvedEntities = resolvedEntityView.getResolvedPath(namespace);
     if (resolvedEntities == null) {
-      throw new NoSuchNamespaceException("Namespace does not exist: %s", namespace);
+      throw noSuchNamespaceException(namespace);
     }
     PolarisEntity entity = resolvedEntities.getRawLeafEntity();
     Map<String, String> newProperties = new HashMap<>(entity.getPropertiesAsMap());
@@ -705,7 +740,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       throws NoSuchNamespaceException {
     PolarisResolvedPathWrapper resolvedEntities = resolvedEntityView.getResolvedPath(namespace);
     if (resolvedEntities == null) {
-      throw new NoSuchNamespaceException("Namespace does not exist: %s", namespace);
+      throw noSuchNamespaceException(namespace);
     }
     PolarisEntity entity = resolvedEntities.getRawLeafEntity();
 
@@ -737,7 +772,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       throws NoSuchNamespaceException {
     PolarisResolvedPathWrapper resolvedEntities = resolvedEntityView.getResolvedPath(namespace);
     if (resolvedEntities == null) {
-      throw new NoSuchNamespaceException("Namespace does not exist: %s", namespace);
+      throw noSuchNamespaceException(namespace);
     }
     NamespaceEntity entity = NamespaceEntity.of(resolvedEntities.getRawLeafEntity());
     Preconditions.checkState(
@@ -763,7 +798,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       throws NoSuchNamespaceException {
     PolarisResolvedPathWrapper resolvedEntities = resolvedEntityView.getResolvedPath(namespace);
     if (resolvedEntities == null) {
-      throw new NoSuchNamespaceException("Namespace does not exist: %s", namespace);
+      throw noSuchNamespaceException(namespace);
     }
 
     List<PolarisEntity> catalogPath = resolvedEntities.getRawFullPath();
@@ -810,13 +845,49 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
     return new BasePolarisViewOperations(catalogFileIO, identifier);
   }
 
+  /**
+   * Override to fix a bug in {@link BaseMetastoreViewCatalog#loadView} where {@link #newViewOps} is
+   * called twice, causing redundant metadata fetches. This implementation reuses the same {@link
+   * ViewOperations} instance.
+   */
+  @Override
+  public View loadView(TableIdentifier identifier) {
+    if (isValidIdentifier(identifier)) {
+      ViewOperations ops = newViewOps(identifier);
+      if (ops.current() == null) {
+        throw notFoundExceptionForTableLikeEntity(identifier, PolarisEntitySubType.ICEBERG_VIEW);
+      }
+      return new BaseView(ops, ViewUtil.fullViewName(name(), identifier));
+    }
+
+    throw new NoSuchViewException("Invalid view identifier: %s", identifier);
+  }
+
   @Override
   public boolean dropView(TableIdentifier identifier) {
     boolean purge =
         realmConfig.getConfig(FeatureConfiguration.PURGE_VIEW_METADATA_ON_DROP, catalogEntity);
 
-    return dropTableLike(PolarisEntitySubType.ICEBERG_VIEW, identifier, Map.of(), purge)
-        .isSuccess();
+    DropEntityResult dropEntityResult =
+        dropTableLike(PolarisEntitySubType.ICEBERG_VIEW, identifier, Map.of(), purge);
+    if (!dropEntityResult.isSuccess()) {
+      switch (dropEntityResult.getReturnStatus()) {
+        case BaseResult.ReturnStatus.ENTITY_NOT_FOUND:
+          return false;
+
+        case BaseResult.ReturnStatus.ENTITY_UNDROPPABLE:
+          throw new ForbiddenException(
+              "View %s cannot be dropped: %s", identifier, dropEntityResult.getExtraInformation());
+
+        default:
+          throw new ServiceFailureException(
+              "Failed to drop view %s, status=%s, extraInfo=%s",
+              identifier,
+              dropEntityResult.getReturnStatus(),
+              dropEntityResult.getExtraInformation());
+      }
+    }
+    return true;
   }
 
   @Override
@@ -1323,7 +1394,8 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
         } else {
           // when current is non-null, the table exists. but when base is null, the commit is trying
           // to create the table
-          throw new AlreadyExistsException("Table already exists: %s", fullTableName);
+          throw alreadyExistsExceptionForTableLikeEntity(
+              fullTableName, PolarisEntitySubType.ICEBERG_TABLE);
         }
       }
       // if the metadata is not changed, return early
@@ -1387,7 +1459,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
             new PolarisEvent(
                 PolarisEventType.BEFORE_REFRESH_TABLE,
                 eventMetadataFactory.create(),
-                new AttributeMap()
+                new EventAttributeMap()
                     .put(EventAttributes.CATALOG_NAME, catalogName)
                     .put(EventAttributes.TABLE_IDENTIFIER, tableIdentifier)));
         refreshFromMetadataLocation(
@@ -1413,7 +1485,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
             new PolarisEvent(
                 PolarisEventType.AFTER_REFRESH_TABLE,
                 eventMetadataFactory.create(),
-                new AttributeMap()
+                new EventAttributeMap()
                     .put(EventAttributes.CATALOG_NAME, catalogName)
                     .put(EventAttributes.TABLE_IDENTIFIER, tableIdentifier)));
       }
@@ -1502,13 +1574,9 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
           resolvedEntityView.getPassthroughResolvedPath(
               tableIdentifier, PolarisEntityType.TABLE_LIKE, PolarisEntitySubType.ANY_SUBTYPE);
       if (resolvedPath != null && resolvedPath.getRawLeafEntity() != null) {
-        if (resolvedPath.getRawLeafEntity().getSubType() == PolarisEntitySubType.ICEBERG_VIEW) {
-          throw new AlreadyExistsException(
-              "View with same name already exists: %s", tableIdentifier);
-        } else if (resolvedPath.getRawLeafEntity().getSubType()
-            == PolarisEntitySubType.GENERIC_TABLE) {
-          throw new AlreadyExistsException(
-              "Generic table with same name already exists: %s", tableIdentifier);
+        var subType = resolvedPath.getRawLeafEntity().getSubType();
+        if (subType != PolarisEntitySubType.ICEBERG_TABLE) {
+          throw alreadyExistsExceptionWithSameNameForTableLikeEntity(tableIdentifier, subType);
         }
       }
       Map<String, String> storedProperties = buildTableMetadataPropertiesMap(metadata);
@@ -1540,11 +1608,13 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       }
       if (!Objects.equal(existingLocation, oldLocation)) {
         if (null == base) {
-          throw new AlreadyExistsException("Table already exists: %s", fullTableName);
+          throw alreadyExistsExceptionForTableLikeEntity(
+              fullTableName, PolarisEntitySubType.ICEBERG_TABLE);
         }
 
         if (null == existingLocation) {
-          throw new NoSuchTableException("Table does not exist: %s", fullTableName);
+          throw notFoundExceptionForTableLikeEntity(
+              fullTableName, PolarisEntitySubType.ICEBERG_TABLE);
         }
 
         throw new CommitFailedException(
@@ -1661,7 +1731,18 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
 
   private static Map<String, String> buildTableMetadataPropertiesMap(TableMetadata metadata) {
     Map<String, String> storedProperties = new HashMap<>();
+    // Location specific properties
     storedProperties.put(IcebergTableLikeEntity.LOCATION, metadata.location());
+    if (metadata.properties().containsKey(TableProperties.WRITE_DATA_LOCATION)) {
+      storedProperties.put(
+          IcebergTableLikeEntity.USER_SPECIFIED_WRITE_DATA_LOCATION_KEY,
+          metadata.properties().get(TableProperties.WRITE_DATA_LOCATION));
+    }
+    if (metadata.properties().containsKey(TableProperties.WRITE_METADATA_LOCATION)) {
+      storedProperties.put(
+          IcebergTableLikeEntity.USER_SPECIFIED_WRITE_METADATA_LOCATION_KEY,
+          metadata.properties().get(TableProperties.WRITE_METADATA_LOCATION));
+    }
     storedProperties.put(
         IcebergTableLikeEntity.FORMAT_VERSION, String.valueOf(metadata.formatVersion()));
     storedProperties.put(IcebergTableLikeEntity.TABLE_UUID, metadata.uuid());
@@ -1751,7 +1832,8 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
         } else {
           // when current is non-null, the view exists. but when base is null, the commit is trying
           // to create the view
-          throw new AlreadyExistsException("View already exists: %s", viewName());
+          throw alreadyExistsExceptionForTableLikeEntity(
+              identifier, PolarisEntitySubType.ICEBERG_VIEW);
         }
       }
 
@@ -1797,7 +1879,7 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
             new PolarisEvent(
                 PolarisEventType.BEFORE_REFRESH_VIEW,
                 eventMetadataFactory.create(),
-                new AttributeMap()
+                new EventAttributeMap()
                     .put(EventAttributes.CATALOG_NAME, catalogName)
                     .put(EventAttributes.VIEW_IDENTIFIER, identifier)));
         refreshFromMetadataLocation(
@@ -1825,23 +1907,13 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
             new PolarisEvent(
                 PolarisEventType.AFTER_REFRESH_VIEW,
                 eventMetadataFactory.create(),
-                new AttributeMap()
+                new EventAttributeMap()
                     .put(EventAttributes.CATALOG_NAME, catalogName)
                     .put(EventAttributes.VIEW_IDENTIFIER, identifier)));
       }
     }
 
     public void doCommit(ViewMetadata base, ViewMetadata metadata) {
-      polarisEventListener.onEvent(
-          new PolarisEvent(
-              PolarisEventType.BEFORE_COMMIT_VIEW,
-              eventMetadataFactory.create(),
-              new AttributeMap()
-                  .put(EventAttributes.CATALOG_NAME, catalogName)
-                  .put(EventAttributes.VIEW_IDENTIFIER, identifier)
-                  .put(EventAttributes.VIEW_METADATA_BEFORE, base)
-                  .put(EventAttributes.VIEW_METADATA_AFTER, metadata)));
-
       // TODO: Maybe avoid writing metadata if there's definitely a transaction conflict
       LOGGER.debug(
           "doCommit for view {} with metadataBefore {}, metadataAfter {}",
@@ -1858,7 +1930,8 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
           resolvedEntityView.getPassthroughResolvedPath(
               identifier, PolarisEntityType.TABLE_LIKE, PolarisEntitySubType.ICEBERG_TABLE);
       if (resolvedTable != null) {
-        throw new AlreadyExistsException("Table with same name already exists: %s", identifier);
+        throw alreadyExistsExceptionWithSameNameForTableLikeEntity(
+            identifier, PolarisEntitySubType.ICEBERG_TABLE);
       }
 
       PolarisResolvedPathWrapper resolvedEntities =
@@ -1922,11 +1995,12 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       }
       if (!Objects.equal(existingLocation, oldLocation)) {
         if (null == base) {
-          throw new AlreadyExistsException("View already exists: %s", identifier);
+          throw alreadyExistsExceptionForTableLikeEntity(
+              identifier, PolarisEntitySubType.ICEBERG_VIEW);
         }
 
         if (null == existingLocation) {
-          throw new NoSuchViewException("View does not exist: %s", identifier);
+          throw notFoundExceptionForTableLikeEntity(identifier, PolarisEntitySubType.ICEBERG_VIEW);
         }
 
         throw new CommitFailedException(
@@ -1939,16 +2013,6 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
       } else {
         updateTableLike(identifier, entity);
       }
-
-      polarisEventListener.onEvent(
-          new PolarisEvent(
-              PolarisEventType.AFTER_COMMIT_VIEW,
-              eventMetadataFactory.create(),
-              new AttributeMap()
-                  .put(EventAttributes.CATALOG_NAME, catalogName)
-                  .put(EventAttributes.VIEW_IDENTIFIER, identifier)
-                  .put(EventAttributes.VIEW_METADATA_BEFORE, base)
-                  .put(EventAttributes.VIEW_METADATA_AFTER, metadata)));
     }
 
     protected String writeNewMetadataIfRequired(ViewMetadata metadata) {
@@ -2201,19 +2265,9 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
           {
             PolarisEntitySubType existingEntitySubType =
                 returnedEntityResult.getAlreadyExistsEntitySubType();
-            if (existingEntitySubType == null) {
-              // this code path is unexpected
-              throw new AlreadyExistsException(
-                  "Cannot rename %s to %s. Object already exists", from, to);
-            } else if (existingEntitySubType == PolarisEntitySubType.ICEBERG_TABLE) {
-              throw new AlreadyExistsException(
-                  "Cannot rename %s to %s. Table already exists", from, to);
-            } else if (existingEntitySubType == PolarisEntitySubType.ICEBERG_VIEW) {
-              throw new AlreadyExistsException(
-                  "Cannot rename %s to %s. View already exists", from, to);
-            }
-            throw new IllegalStateException(
-                String.format("Unexpected entity type '%s'", existingEntitySubType));
+            throw new AlreadyExistsException(
+                "Cannot rename %s to %s. %s already exists",
+                from, to, entityNameForSubType(existingEntitySubType));
           }
 
         case BaseResult.ReturnStatus.ENTITY_NOT_FOUND:
@@ -2316,8 +2370,8 @@ public class IcebergCatalog extends BaseMetastoreViewCatalog
           throw new NotFoundException("Parent path does not exist for %s", identifier);
 
         case BaseResult.ReturnStatus.ENTITY_ALREADY_EXISTS:
-          throw new AlreadyExistsException(
-              "Iceberg table, view, or generic table already exists: %s", identifier);
+          throw alreadyExistsExceptionForTableLikeEntity(
+              identifier, res.getAlreadyExistsEntitySubType());
         default:
           throw new IllegalStateException(
               String.format(

@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Apache Polaris (incubating)
+# Apache Polaris
 
 Apache Polaris&trade; is an open-source, fully-featured catalog for Apache Iceberg&trade;. It implements Iceberg's 
 [REST API](https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml),
@@ -32,7 +32,7 @@ and [Polaris Catalog API doc](https://editor-next.swagger.io/?url=https://raw.gi
 for contribution guidelines.
 
 [![Slack](https://img.shields.io/badge/chat-on%20Slack-brightgreen.svg?style=for-the-badge)](https://join.slack.com/t/apache-polaris/shared_invite/zt-2y3l3r0fr-VtoW42ltir~nSzCYOrQgfw)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/apache/polaris/gradle.yml?branch=main&label=Main%20CI&logo=Github&style=for-the-badge)](https://github.com/apache/polaris/actions/workflows/gradle.yml?query=branch%3Amain)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/apache/polaris/ci-main.yml?branch=main&label=Main%20CI&logo=Github&style=for-the-badge)](https://github.com/apache/polaris/actions/workflows/ci-main.yml?query=branch%3Amain)
 
 [dev-list-subscribe]: mailto:dev-subscribe@polaris.apache.org
 
@@ -79,6 +79,7 @@ Apache Polaris is organized into the following modules:
         - `polaris-container-spec-helper` - Helper for container specifications
         - `polaris-immutables` - Predefined Immutables configuration & annotations for Polaris
         - `polaris-minio-testcontainer` - Minio test container
+        - `polaris-rustfs-testcontainer` - RustFS test container
         - `polaris-misc-types` - Miscellaneous types for Polaris
         - `polaris-version` - Versioning for Polaris
 
@@ -207,9 +208,3 @@ Advanced configuration options for publishing build scans (only local and non-`a
 ## License
 
 Apache Polaris is under the Apache License Version 2.0. See the [LICENSE](LICENSE).
-
-## ASF Incubator disclaimer
-
-Apache Polaris&trade; is an effort undergoing incubation at The Apache Software Foundation (ASF), sponsored by the Apache Incubator. Incubation is required of all newly accepted projects until a further review indicates that the infrastructure, communications, and decision making process have stabilized in a manner consistent with other successful ASF projects. While incubation status is not necessarily a reflection of the completeness or stability of the code, it does indicate that the project has yet to be fully endorsed by the ASF.
- 
-<sub>Apache&reg;, Apache Polaris&trade;, Apache Iceberg&trade;, Apache Spark&trade; are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries.</sub>

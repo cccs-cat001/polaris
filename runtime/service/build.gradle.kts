@@ -38,12 +38,18 @@ dependencies {
   compileOnly(project(":polaris-immutables"))
   annotationProcessor(project(":polaris-immutables", configuration = "processor"))
 
+  compileOnly(project(":polaris-config-docs-annotations"))
+
+  runtimeOnly(project(":polaris-persistence-nosql-metastore"))
+  runtimeOnly(project(":polaris-persistence-nosql-cdi-quarkus"))
+  runtimeOnly(project(":polaris-persistence-nosql-cdi-quarkus-distcache"))
+  runtimeOnly(project(":polaris-persistence-nosql-maintenance-impl"))
+  runtimeOnly(project(":polaris-persistence-nosql-metastore-maintenance"))
+
   implementation(platform(libs.iceberg.bom))
   implementation("org.apache.iceberg:iceberg-api")
   implementation("org.apache.iceberg:iceberg-core")
   implementation("org.apache.iceberg:iceberg-aws")
-
-  implementation(platform(libs.opentelemetry.bom))
 
   implementation(platform(libs.quarkus.bom))
   implementation("io.quarkus:quarkus-logging-json")
@@ -107,6 +113,9 @@ dependencies {
 
   runtimeOnly(project(":polaris-async-vertx"))
 
+  testCompileOnly(project(":polaris-immutables"))
+  testAnnotationProcessor(project(":polaris-immutables", configuration = "processor"))
+
   testFixturesApi(project(":polaris-tests")) {
     // exclude all spark dependencies
     exclude(group = "org.apache.iceberg", module = "iceberg-spark-3.5_2.12")
@@ -118,6 +127,7 @@ dependencies {
   testImplementation(project(":polaris-relational-jdbc"))
 
   testImplementation(project(":polaris-minio-testcontainer"))
+  testImplementation(project(":polaris-rustfs-testcontainer"))
 
   testImplementation("org.apache.iceberg:iceberg-api:${libs.versions.iceberg.get()}:tests")
   testImplementation("org.apache.iceberg:iceberg-core:${libs.versions.iceberg.get()}:tests")
@@ -127,8 +137,8 @@ dependencies {
   testImplementation("software.amazon.awssdk:dynamodb")
 
   testImplementation(enforcedPlatform(libs.quarkus.bom))
-  testImplementation("io.quarkus:quarkus-junit5")
-  testImplementation("io.quarkus:quarkus-junit5-mockito")
+  testImplementation("io.quarkus:quarkus-junit")
+  testImplementation("io.quarkus:quarkus-junit-mockito")
   testImplementation("io.quarkus:quarkus-rest-client")
   testImplementation("io.quarkus:quarkus-rest-client-jackson")
   testImplementation("io.quarkus:quarkus-jdbc-h2")
@@ -151,6 +161,10 @@ dependencies {
   testImplementation(platform(libs.testcontainers.bom))
   testImplementation("org.testcontainers:testcontainers")
   testImplementation("org.testcontainers:testcontainers-postgresql")
+
+  testImplementation(project(":polaris-persistence-nosql-api"))
+  testImplementation(testFixtures(project(":polaris-persistence-nosql-api")))
+  testImplementation(project(":polaris-persistence-nosql-impl"))
 
   testFixturesImplementation(project(":polaris-core"))
   testFixturesImplementation(project(":polaris-api-management-model"))

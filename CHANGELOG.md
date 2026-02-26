@@ -29,18 +29,69 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 
 ### Highlights
 
+### Upgrade notes
+
+- The custom token-bucket based rate limiter has been replaced with Guava's rate limiter implementation.
+- The Helm chart now includes a JSON schema file for easy validation of values files. Because types 
+  are now validated, existing values files may need to be updated to match the new schema.
+  
+
+### Breaking changes
+
+- The (Before/After)CommitViewEvent has been removed.
+- The (Before/After)CommitTableEvent has been removed.
+- The `PolarisMetricsReporter.reportMetric()` method signature has been extended to include a `receivedTimestamp` parameter of type `java.time.Instant`.
+- The `ExternalCatalogFactory.createCatalog()` and `createGenericCatalog()` method signatures have been extended to include a `catalogProperties` parameter of type `Map<String, String>` for passing through proxy and timeout settings to federated catalog HTTP clients.
+- Metrics reporting now requires the `TABLE_READ_DATA` privilege on the target table for read (scan) metrics and `TABLE_WRITE_DATA` for write (commit) metrics.
+
+### New Features
+
+- Added KMS properties (optional) to catalog storage config to enable S3 data encryption.
+- Added `topologySpreadConstraints` support in Helm chart.
+- Added `priorityClassName` support in Helm chart.
+- Added support for including principal name in subscoped credentials. `INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL` (default: false) can be used to toggle this feature. If enabled, cached credentials issued to one principal will no longer be available for others.
+- Added per-field selection for AWS STS session tags in credential vending. The new `SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL` configuration accepts a comma-separated list of fields to include as session tags (supported: `realm`, `catalog`, `namespace`, `table`, `principal`, `roles`, `trace_id`). This replaces the previous `INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL` and `INCLUDE_TRACE_ID_IN_SESSION_TAGS` boolean flags. Selecting only the fields needed helps avoid AWS STS packed policy size limit errors (2048 characters) caused by long namespace paths. Note: including `trace_id` disables credential caching, which may increase STS calls and latency.
+- Added support for [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) to the Helm Chart.
+- Added `hierarchical` flag to `AzureStorageConfigInfo` to allow more precise SAS token down-scoping in ADLS when
+  the [hierarchical namespace](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-namespace)
+  feature is enabled in Azure.
+- Relaxed `client_id`, `client_secret` regex/pattern validation on reset endpoint call
+- Added support for S3-compatible storage that does not have KMS (use `kmsUavailable: true` in catalog storage configuration)
+- Added support for storage-scoped AWS credentials, allowing different AWS credentials to be configured per named storage. Enable with the `RESOLVE_CREDENTIALS_BY_STORAGE_NAME` feature flag (default: false). Storage names can be set explicitly via the `storageName` field on storage configuration, or inferred from the first allowed location's host.
+
+### Changes
+
+- The `gcpServiceAccount` configuration value now affects Polaris behavior (enables service account impersonation). This value was previously defined but unused. This change may affect existing deployments that have populated this property.
+- (Before/After)UpdateTableEvent is emitted for all table updates within a transaction.
+- Added KMS options to Polaris CLI.
+- Changed from Poetry to UV for Python package management.
+- Exclude KMS policies when KMS is not being used for S3.
+- Improved default KMS permission handling to better distinguish read-only and read-write access.
+
+### Deprecations
+
+- The configuration option `polaris.rate-limiter.token-bucket.window` is no longer supported and should be removed.
+- `PolarisConfigurationStore` has been deprecated for removal.
+
+### Fixes
+
+- Fixed error propagation in drop operations (`dropTable`, `dropView`, `dropNamespace`). Server errors now return appropriate HTTP status codes based on persistence result instead of always returning NotFound
+- Enable non-AWS STS role ARNs
+
+### Commits
+
+## [1.3.0-incubating]
+
+### Highlights
+
 - Support for [Iceberg Metrics Reporting] has been introduced in Polaris. Out of the box, metrics can
   be printed to the logs by setting the `org.apache.polaris.service.reporting` logger level to `INFO` (it's
   set to `OFF` by default). Custom reporters can be implemented and configured to send metrics to
   external systems for further analysis and monitoring.
-
 - Support for [Open Policy Agent (OPA)] integration has been added to Polaris. This enables delegating
   authorization decisions to external policy decision points, allowing organizations to centralize
   policy management and implement complex authorization rules. OPA integration can be enabled by setting
   `polaris.authorization.type=opa` in the Polaris configuration.
-
-[Iceberg Metrics Reporting]: https://iceberg.apache.org/docs/latest/metrics-reporting/
-[Open Policy Agent (OPA)]: https://www.openpolicyagent.org/
 
 ### Upgrade notes
 
@@ -51,37 +102,20 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 
 - The EclipseLink Persistence implementation has been completely removed.
 - The default request ID header name has changed from `Polaris-Request-Id` to `X-Request-ID`.
-- The (Before/After)CommitTableEvent has been removed.
 
 ### New Features
 
 - Added `--no-sts` flag to CLI to support S3-compatible storage systems that do not have Security Token Service available.
 - Support credential vending for federated catalogs. `ALLOW_FEDERATED_CATALOGS_CREDENTIAL_VENDING` (default: true) was added to toggle this feature.
 - Enhanced catalog federation with SigV4 authentication support, additional authentication types for credential vending, and location-based access restrictions to block credential vending for remote tables outside allowed location lists.
-- Added `topologySpreadConstraints` support in Helm chart.
-- Added `priorityClassName` support in Helm chart.
-- Added support for including principal name in subscoped credentials. `INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL` (default: false) can be used to toggle this feature. If enabled, cached credentials issued to one principal will no longer be available for others.
-- Added support for [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) to the Helm Chart. 
-- Added `hierarchical` flag to `AzureStorageConfigInfo` to allow more precise SAS token down-scoping in ADLS when
-  the [hierarchical namespace](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-namespace)
-  feature is enabled in Azure.
 
 ### Changes
 
-- The `gcpServiceAccount` configuration value now affects Polaris behavior (enables service account impersonation). This value was previously defined but unused. This change may affect existing deployments that have populated this property.
 - `client.region` is no longer considered a "credential" property (related to Iceberg REST Catalog API).
 - Relaxed the requirements for S3 storage's ARN to allow Polaris to connect to more non-AWS S3 storage appliances. 
 - Added checksum to helm deployment so that it will restart when the configmap has changed.
 - Generic Table is no longer in beta and is generally-available.
 - Added Windows support for Python client.
-- (Before/After)UpdateTableEvent is emitted for all table updates within a transaction.
-- Added KMS options to Polaris CLI
-
-### Deprecations
-
-### Fixes
-
-### Commits
 
 ## [1.2.0-incubating]
 
@@ -95,7 +129,6 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
 
 ### New Features
 
-- Added KMS properties (optional) to catalog storage config to enable S3 data encryption.
 - Added a finer grained authorization model for UpdateTable requests. Existing privileges continue to work for granting UpdateTable, such as `TABLE_WRITE_PROPERTIES`.
   However, you can now instead grant privileges just for specific operations, such as `TABLE_ADD_SNAPSHOT`
 - Added a Management API endpoint to reset principal credentials, controlled by the `ENABLE_CREDENTIAL_RESET` (default: true) feature flag.
@@ -226,9 +259,12 @@ Apache Polaris 1.0.0-incubating was released on July 9th, 2025.
 
 Apache Polaris 0.9.0 was released on March 11, 2025 as the first Polaris release. Only the source distribution is available for this release.
 
-[Unreleased]: https://github.com/apache/polaris/compare/apache-polaris-1.2.0-incubating...HEAD
+[Unreleased]: https://github.com/apache/polaris/compare/apache-polaris-1.3.0-incubating...HEAD
+[1.3.0-incubating]: https://github.com/apache/polaris/compare/apache-polaris-1.2.0-incubating...apache-polaris-1.3.0-incubating
 [1.2.0-incubating]: https://github.com/apache/polaris/compare/apache-polaris-1.1.0-incubating...apache-polaris-1.2.0-incubating
 [1.1.0-incubating]: https://github.com/apache/polaris/compare/apache-polaris-1.0.1-incubating...apache-polaris-1.1.0-incubating
 [1.0.1-incubating]: https://github.com/apache/polaris/compare/apache-polaris-1.0.0-incubating...apache-polaris-1.0.1-incubating
 [1.0.0-incubating]: https://github.com/apache/polaris/compare/apache-polaris-0.9.0-incubating...apache-polaris-1.0.0-incubating
 [0.9.0-incubating]: https://github.com/apache/polaris/commits/apache-polaris-0.9.0-incubating
+[Open Policy Agent (OPA)]: https://www.openpolicyagent.org/
+[Iceberg Metrics Reporting]: https://iceberg.apache.org/docs/latest/metrics-reporting/

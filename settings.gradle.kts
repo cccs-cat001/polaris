@@ -112,7 +112,10 @@ pluginManagement {
 }
 
 plugins {
-  id("com.gradle.develocity") version "4.3"
+  // When updating the develocity plugin version, verify that the version that
+  // https://develocity.apache.org/ runs is compatible with the plugin version
+  // as on https://docs.gradle.com/develocity/current/miscellaneous/compatibility/
+  id("com.gradle.develocity") version "4.3.2"
   id("com.gradle.common-custom-user-data-gradle-plugin") version "2.4.0"
 }
 
@@ -122,6 +125,21 @@ dependencyResolutionManagement {
     maven { url = java.net.URI("https://bagofholding.cse-cst.gc.ca/repository/maven-central/") }
     maven { url = java.net.URI("https://bagofholding.cse-cst.gc.ca/repository/maven-ap/") }
     mavenCentral()
+    val useApacheSnapshots =
+      providers.gradleProperty("useApacheSnapshots").orNull?.toBoolean() == true
+    if (useApacheSnapshots) {
+      // This is a hack to let Renovate _not_ query the Apache snapshot repository for all
+      // dependencies.
+      // See https://github.com/renovatebot/renovate/discussions/41291
+      fun configureIndirectForRenovate(asfSnap: MavenArtifactRepository) {
+        asfSnap.url = uri("https://repository.apache.org/content/repositories/snapshots/")
+        asfSnap.mavenContent { snapshotsOnly() }
+      }
+      maven {
+        name = "ApacheSnapshots"
+        configureIndirectForRenovate(this)
+      }
+    }
     gradlePluginPortal()
   }
 }

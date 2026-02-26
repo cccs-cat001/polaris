@@ -1075,6 +1075,9 @@ components:
           items:
             type: string
           example: "For AWS [s3://bucketname/prefix/], for AZURE [abfss://container@storageaccount.blob.core.windows.net/prefix/], for GCP [gs://bucketname/prefix/]"
+        storageName:
+          type: string
+          description: An optional name referencing a server-side storage configuration
       required:
         - storageType
       discriminator:
@@ -1149,6 +1152,10 @@ components:
                 Whether S3 requests to files in this catalog should use 'path-style addressing for buckets'.
               example: true
               default: false
+            kmsUnavailable:
+              type: boolean
+              description: >-
+                if set to `true`, instructs Polaris Servers to avoid adding KMS key policies.
 
     AzureStorageConfigInfo:
       type: object

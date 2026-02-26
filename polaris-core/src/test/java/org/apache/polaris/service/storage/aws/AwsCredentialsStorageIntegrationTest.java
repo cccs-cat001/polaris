@@ -18,20 +18,21 @@
  */
 package org.apache.polaris.service.storage.aws;
 
+import static org.apache.polaris.core.config.FeatureConfiguration.INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL;
+import static org.apache.polaris.core.config.FeatureConfiguration.SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import jakarta.annotation.Nonnull;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.FeatureConfiguration;
-import org.apache.polaris.core.config.PolarisConfigurationStore;
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.config.RealmConfigImpl;
-import org.apache.polaris.core.context.RealmContext;
 import org.apache.polaris.core.storage.BaseStorageIntegrationTest;
 import org.apache.polaris.core.storage.CredentialVendingContext;
 import org.apache.polaris.core.storage.StorageAccessConfig;
@@ -64,19 +65,19 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
   public static final Instant EXPIRE_TIME = Instant.now().plusMillis(3600_000);
 
   public static final RealmConfig PRINCIPAL_INCLUDER_REALM_CONFIG =
-      new RealmConfigImpl(
-          new PolarisConfigurationStore() {
-            @SuppressWarnings("unchecked")
-            @Override
-            public String getConfiguration(@Nonnull RealmContext ctx, String configName) {
-              if (configName.equals(
-                  FeatureConfiguration.INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL.key())) {
-                return "true";
-              }
-              return null;
-            }
-          },
-          () -> "realm");
+      enabledFeatures(INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL);
+
+  // Session tags enabled with the default fields: catalog, namespace, table, principal, roles
+  private static final RealmConfig SESSION_TAGS_ENABLED_CONFIG =
+      sessionTagFields("catalog", "namespace", "table", "principal", "roles");
+
+  // Session tags enabled with realm + default fields
+  private static final RealmConfig SESSION_TAGS_WITH_REALM_CONFIG =
+      sessionTagFields("realm", "catalog", "namespace", "table", "principal", "roles");
+
+  // Session tags enabled with all fields including trace_id
+  private static final RealmConfig SESSION_TAGS_WITH_TRACE_ID_CONFIG =
+      sessionTagFields("catalog", "namespace", "table", "principal", "roles", "trace_id");
 
   public static final AssumeRoleResponse ASSUME_ROLE_RESPONSE =
       AssumeRoleResponse.builder()
@@ -91,6 +92,25 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
   public static final String AWS_PARTITION = "aws";
   public static final PolarisPrincipal POLARIS_PRINCIPAL =
       PolarisPrincipal.of("test-principal", Map.of(), Set.of());
+
+  @SafeVarargs
+  private static RealmConfig enabledFeatures(FeatureConfiguration<Boolean>... enabledOptions) {
+    return new RealmConfigImpl(
+        (rc, name) ->
+            Arrays.stream(enabledOptions).anyMatch(o -> o.key().equals(name)) ? "true" : null,
+        () -> "realm");
+  }
+
+  private static RealmConfig sessionTagFields(String... fields) {
+    return new RealmConfigImpl(
+        (rc, name) -> {
+          if (name.equals(SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL.key())) {
+            return List.of(fields);
+          }
+          return null;
+        },
+        () -> "realm");
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {"s3a", "s3"})
@@ -468,11 +488,8 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                                         .returns(IamEffect.ALLOW, IamStatement::effect)
                                         .returns(
                                             List.of(
-                                                IamAction.create(
-                                                    "kms:GenerateDataKeyWithoutPlaintext"),
                                                 IamAction.create("kms:DescribeKey"),
-                                                IamAction.create("kms:Decrypt"),
-                                                IamAction.create("kms:GenerateDataKey")),
+                                                IamAction.create("kms:Decrypt")),
                                             IamStatement::actions)
                                         .returns(
                                             List.of(
@@ -583,11 +600,8 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                                         .returns(IamEffect.ALLOW, IamStatement::effect)
                                         .returns(
                                             List.of(
-                                                IamAction.create(
-                                                    "kms:GenerateDataKeyWithoutPlaintext"),
                                                 IamAction.create("kms:DescribeKey"),
-                                                IamAction.create("kms:Decrypt"),
-                                                IamAction.create("kms:GenerateDataKey")),
+                                                IamAction.create("kms:Decrypt")),
                                             IamStatement::actions)
                                         .returns(
                                             List.of(
@@ -752,6 +766,82 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
   }
 
   @Test
+  public void testKmsUnavailablePolicyLogic() {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    String roleARN = "arn:aws:iam::012345678901:role/jdoe";
+    String externalId = "externalId";
+    String bucket = "bucket";
+    String warehouseKeyPrefix = "path/to/warehouse";
+    String region = "us-east-2";
+    String currentKmsKey = "arn:aws:kms:us-east-1:012345678901:key/current-key";
+    // Test with kmsUnavailable=true and write permissions - should NOT add KMS policies
+    Mockito.when(stsClient.assumeRole(Mockito.isA(AssumeRoleRequest.class)))
+        .thenAnswer(
+            invocation -> {
+              AssumeRoleRequest request = invocation.getArgument(0);
+              IamPolicy policy = IamPolicy.fromJson(request.policy());
+              assertThat(policy.statements())
+                  .noneMatch(
+                      stmt ->
+                          stmt.actions().stream()
+                              .anyMatch(action -> action.value().startsWith("kms:")));
+              return ASSUME_ROLE_RESPONSE;
+            });
+
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(s3Path(bucket, warehouseKeyPrefix))
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .region(region)
+                .currentKmsKey(currentKmsKey)
+                .kmsUnavailable(true)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            EMPTY_REALM_CONFIG,
+            true,
+            Set.of(s3Path(bucket, warehouseKeyPrefix + "/table")),
+            Set.of(s3Path(bucket, warehouseKeyPrefix + "/table")),
+            POLARIS_PRINCIPAL,
+            Optional.empty(),
+            CredentialVendingContext.empty());
+
+    // Test with kmsUnavailable=true and read-only permissions - should NOT add KMS policies
+    Mockito.reset(stsClient);
+    Mockito.when(stsClient.assumeRole(Mockito.isA(AssumeRoleRequest.class)))
+        .thenAnswer(
+            invocation -> {
+              AssumeRoleRequest request = invocation.getArgument(0);
+              IamPolicy policy = IamPolicy.fromJson(request.policy());
+              assertThat(policy.statements())
+                  .noneMatch(
+                      stmt ->
+                          stmt.actions().stream()
+                              .anyMatch(action -> action.value().startsWith("kms:")));
+              return ASSUME_ROLE_RESPONSE;
+            });
+
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(s3Path(bucket, warehouseKeyPrefix))
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .region(region)
+                .kmsUnavailable(true)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            EMPTY_REALM_CONFIG,
+            true,
+            Set.of(s3Path(bucket, warehouseKeyPrefix + "/table")),
+            Set.of(),
+            POLARIS_PRINCIPAL,
+            Optional.empty(),
+            CredentialVendingContext.empty());
+  }
+
+  @Test
   public void testKmsKeyPolicyLogic() {
     StsClient stsClient = Mockito.mock(StsClient.class);
     String roleARN = "arn:aws:iam::012345678901:role/jdoe";
@@ -824,11 +914,14 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                         assertThat(stmt.actions())
                             .containsAll(
                                 List.of(
-                                    IamAction.create("kms:GenerateDataKeyWithoutPlaintext"),
                                     IamAction.create("kms:DescribeKey"),
-                                    IamAction.create("kms:Decrypt"),
-                                    IamAction.create("kms:GenerateDataKey")));
-                        assertThat(stmt.actions()).doesNotContain(IamAction.create("kms:Encrypt"));
+                                    IamAction.create("kms:Decrypt")));
+                        assertThat(stmt.actions())
+                            .doesNotContainAnyElementsOf(
+                                List.of(
+                                    IamAction.create("kms:Encrypt"),
+                                    IamAction.create("kms:GenerateDataKey"),
+                                    IamAction.create("kms:GenerateDataKeyWithoutPlaintext")));
                         assertThat(stmt.resources())
                             .containsExactlyInAnyOrder(
                                 IamResource.create(allowedKmsKeys.get(0)),
@@ -972,6 +1065,84 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             CredentialVendingContext.empty());
   }
 
+  @Test
+  public void testGetSubscopedCredsPrincipalNameWithInvalidCharacters() {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    String roleARN = "arn:aws:iam::012345678901:role/jdoe";
+    String externalId = "externalId";
+    // Principal name with spaces and parentheses - invalid for AWS STS
+    PolarisPrincipal polarisPrincipalWithInvalidChars =
+        PolarisPrincipal.of("Invalid Principal (local)", Map.of(), Set.of());
+
+    Mockito.when(stsClient.assumeRole(Mockito.isA(AssumeRoleRequest.class)))
+        .thenAnswer(
+            invocation -> {
+              assertThat(invocation.getArguments()[0])
+                  .isInstanceOf(AssumeRoleRequest.class)
+                  .asInstanceOf(InstanceOfAssertFactories.type(AssumeRoleRequest.class))
+                  .returns(externalId, AssumeRoleRequest::externalId)
+                  .returns(roleARN, AssumeRoleRequest::roleArn)
+                  // Spaces and parentheses should be replaced with underscores
+                  .returns("polaris-Invalid_Principal__local_", AssumeRoleRequest::roleSessionName);
+              return ASSUME_ROLE_RESPONSE;
+            });
+    String warehouseDir = "s3://bucket/path/to/warehouse";
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(warehouseDir)
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            PRINCIPAL_INCLUDER_REALM_CONFIG,
+            true,
+            Set.of(warehouseDir + "/namespace/table"),
+            Set.of(warehouseDir + "/namespace/table"),
+            polarisPrincipalWithInvalidChars,
+            Optional.of("/namespace/table/credentials"),
+            CredentialVendingContext.empty());
+  }
+
+  @Test
+  public void testGetSubscopedCredsPrincipalNameWithSpecialCharacters() {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    String roleARN = "arn:aws:iam::012345678901:role/jdoe";
+    String externalId = "externalId";
+    // Principal name with slashes and colons
+    PolarisPrincipal polarisPrincipalWithSpecialChars =
+        PolarisPrincipal.of("service/account:readonly", Map.of(), Set.of());
+
+    Mockito.when(stsClient.assumeRole(Mockito.isA(AssumeRoleRequest.class)))
+        .thenAnswer(
+            invocation -> {
+              assertThat(invocation.getArguments()[0])
+                  .isInstanceOf(AssumeRoleRequest.class)
+                  .asInstanceOf(InstanceOfAssertFactories.type(AssumeRoleRequest.class))
+                  .returns(externalId, AssumeRoleRequest::externalId)
+                  .returns(roleARN, AssumeRoleRequest::roleArn)
+                  // Slashes and colons should be replaced with underscores
+                  .returns("polaris-service_account_readonly", AssumeRoleRequest::roleSessionName);
+              return ASSUME_ROLE_RESPONSE;
+            });
+    String warehouseDir = "s3://bucket/path/to/warehouse";
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(warehouseDir)
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            PRINCIPAL_INCLUDER_REALM_CONFIG,
+            true,
+            Set.of(warehouseDir + "/namespace/table"),
+            Set.of(warehouseDir + "/namespace/table"),
+            polarisPrincipalWithSpecialChars,
+            Optional.of("/namespace/table/credentials"),
+            CredentialVendingContext.empty());
+  }
+
   private static @Nonnull String s3Arn(String partition, String bucket, String keyPrefix) {
     String bucketArn = "arn:" + partition + ":s3:::" + bucket;
     if (keyPrefix == null) {
@@ -995,26 +1166,15 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
     String warehouseKeyPrefix = "path/to/warehouse";
 
     // Create a realm config with session tags enabled
-    RealmConfig sessionTagsEnabledConfig =
-        new RealmConfigImpl(
-            new PolarisConfigurationStore() {
-              @SuppressWarnings("unchecked")
-              @Override
-              public String getConfiguration(@Nonnull RealmContext ctx, String configName) {
-                if (configName.equals(
-                    FeatureConfiguration.INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL.key())) {
-                  return "true";
-                }
-                return null;
-              }
-            },
-            () -> "realm");
+    RealmConfig sessionTagsEnabledConfig = SESSION_TAGS_ENABLED_CONFIG;
 
     ArgumentCaptor<AssumeRoleRequest> requestCaptor =
         ArgumentCaptor.forClass(AssumeRoleRequest.class);
     Mockito.when(stsClient.assumeRole(requestCaptor.capture())).thenReturn(ASSUME_ROLE_RESPONSE);
 
-    // Roles are included in context (not extracted from principal) to be part of cache key
+    // Roles are included in context (not extracted from principal) to be part of cache key.
+    // Note: traceId is NOT set because INCLUDE_TRACE_ID_IN_SESSION_TAGS is disabled (default).
+    // In production, StorageAccessConfigProvider only populates traceId when that flag is enabled.
     CredentialVendingContext context =
         CredentialVendingContext.builder()
             .catalogName(Optional.of("test-catalog"))
@@ -1040,7 +1200,8 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             context);
 
     AssumeRoleRequest capturedRequest = requestCaptor.getValue();
-    Assertions.assertThat(capturedRequest.tags()).isNotEmpty();
+    // 5 tags are included when session tags enabled but trace_id not in context
+    Assertions.assertThat(capturedRequest.tags()).hasSize(5);
     Assertions.assertThat(capturedRequest.tags())
         .anyMatch(tag -> tag.key().equals("polaris:catalog") && tag.value().equals("test-catalog"));
     Assertions.assertThat(capturedRequest.tags())
@@ -1053,8 +1214,11 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
     // Roles are sorted alphabetically and joined with comma
     Assertions.assertThat(capturedRequest.tags())
         .anyMatch(tag -> tag.key().equals("polaris:roles") && tag.value().equals("admin,reader"));
+    // Verify trace_id is NOT included when not present in context
+    Assertions.assertThat(capturedRequest.tags())
+        .noneMatch(tag -> tag.key().equals("polaris:trace_id"));
 
-    // Verify transitive tag keys are set
+    // Verify transitive tag keys are set (without trace_id)
     Assertions.assertThat(capturedRequest.transitiveTagKeys())
         .containsExactlyInAnyOrder(
             "polaris:catalog",
@@ -1062,6 +1226,79 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             "polaris:table",
             "polaris:principal",
             "polaris:roles");
+  }
+
+  @Test
+  public void testSessionTagsWithTraceIdWhenBothFlagsEnabled() {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    String roleARN = "arn:aws:iam::012345678901:role/jdoe";
+    String externalId = "externalId";
+    String bucket = "bucket";
+    String warehouseKeyPrefix = "path/to/warehouse";
+
+    // Create a realm config with session tags AND trace_id enabled
+    RealmConfig sessionTagsAndTraceIdEnabledConfig = SESSION_TAGS_WITH_TRACE_ID_CONFIG;
+
+    ArgumentCaptor<AssumeRoleRequest> requestCaptor =
+        ArgumentCaptor.forClass(AssumeRoleRequest.class);
+    Mockito.when(stsClient.assumeRole(requestCaptor.capture())).thenReturn(ASSUME_ROLE_RESPONSE);
+
+    // When INCLUDE_TRACE_ID_IN_SESSION_TAGS is enabled, StorageAccessConfigProvider populates
+    // traceId in the context. The presence of traceId in the context determines whether it's
+    // included in session tags (and in the cache key, since it's a normal field).
+    CredentialVendingContext context =
+        CredentialVendingContext.builder()
+            .catalogName(Optional.of("test-catalog"))
+            .namespace(Optional.of("db.schema"))
+            .tableName(Optional.of("my_table"))
+            .activatedRoles(Optional.of("admin,reader"))
+            .traceId(Optional.of("abc123def456"))
+            .build();
+
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(s3Path(bucket, warehouseKeyPrefix))
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            sessionTagsAndTraceIdEnabledConfig,
+            true,
+            Set.of(s3Path(bucket, warehouseKeyPrefix)),
+            Set.of(s3Path(bucket, warehouseKeyPrefix)),
+            POLARIS_PRINCIPAL,
+            Optional.empty(),
+            context);
+
+    AssumeRoleRequest capturedRequest = requestCaptor.getValue();
+    // All 6 tags are included when both session tags AND trace_id are enabled
+    Assertions.assertThat(capturedRequest.tags()).hasSize(6);
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(tag -> tag.key().equals("polaris:catalog") && tag.value().equals("test-catalog"));
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(tag -> tag.key().equals("polaris:namespace") && tag.value().equals("db.schema"));
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(tag -> tag.key().equals("polaris:table") && tag.value().equals("my_table"));
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(
+            tag -> tag.key().equals("polaris:principal") && tag.value().equals("test-principal"));
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(tag -> tag.key().equals("polaris:roles") && tag.value().equals("admin,reader"));
+    // Verify trace_id IS included when INCLUDE_TRACE_ID_IN_SESSION_TAGS is true
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(
+            tag -> tag.key().equals("polaris:trace_id") && tag.value().equals("abc123def456"));
+
+    // Verify transitive tag keys include trace_id
+    Assertions.assertThat(capturedRequest.transitiveTagKeys())
+        .containsExactlyInAnyOrder(
+            "polaris:catalog",
+            "polaris:namespace",
+            "polaris:table",
+            "polaris:principal",
+            "polaris:roles",
+            "polaris:trace_id");
   }
 
   @Test
@@ -1114,20 +1351,7 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
     String bucket = "bucket";
     String warehouseKeyPrefix = "path/to/warehouse";
 
-    RealmConfig sessionTagsEnabledConfig =
-        new RealmConfigImpl(
-            new PolarisConfigurationStore() {
-              @SuppressWarnings("unchecked")
-              @Override
-              public String getConfiguration(@Nonnull RealmContext ctx, String configName) {
-                if (configName.equals(
-                    FeatureConfiguration.INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL.key())) {
-                  return "true";
-                }
-                return null;
-              }
-            },
-            () -> "realm");
+    RealmConfig sessionTagsEnabledConfig = SESSION_TAGS_ENABLED_CONFIG;
 
     ArgumentCaptor<AssumeRoleRequest> requestCaptor =
         ArgumentCaptor.forClass(AssumeRoleRequest.class);
@@ -1154,7 +1378,7 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             context);
 
     AssumeRoleRequest capturedRequest = requestCaptor.getValue();
-    // All 5 tags are always included; missing values use "unknown" placeholder
+    // 5 tags are included when session tags enabled but trace_id disabled (default)
     Assertions.assertThat(capturedRequest.tags()).hasSize(5);
     Assertions.assertThat(capturedRequest.tags())
         .anyMatch(tag -> tag.key().equals("polaris:catalog") && tag.value().equals("test-catalog"));
@@ -1168,6 +1392,9 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
         .anyMatch(tag -> tag.key().equals("polaris:table") && tag.value().equals("unknown"));
     Assertions.assertThat(capturedRequest.tags())
         .anyMatch(tag -> tag.key().equals("polaris:roles") && tag.value().equals("unknown"));
+    // trace_id is NOT included when INCLUDE_TRACE_ID_IN_SESSION_TAGS is not set (defaults to false)
+    Assertions.assertThat(capturedRequest.tags())
+        .noneMatch(tag -> tag.key().equals("polaris:trace_id"));
   }
 
   @Test
@@ -1177,21 +1404,6 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
     String externalId = "externalId";
     String bucket = "bucket";
     String warehouseKeyPrefix = "path/to/warehouse";
-
-    RealmConfig sessionTagsEnabledConfig =
-        new RealmConfigImpl(
-            new PolarisConfigurationStore() {
-              @SuppressWarnings("unchecked")
-              @Override
-              public String getConfiguration(@Nonnull RealmContext ctx, String configName) {
-                if (configName.equals(
-                    FeatureConfiguration.INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL.key())) {
-                  return "true";
-                }
-                return null;
-              }
-            },
-            () -> "realm");
 
     ArgumentCaptor<AssumeRoleRequest> requestCaptor =
         ArgumentCaptor.forClass(AssumeRoleRequest.class);
@@ -1213,7 +1425,7 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                 .build(),
             stsClient)
         .getSubscopedCreds(
-            sessionTagsEnabledConfig,
+            SESSION_TAGS_ENABLED_CONFIG,
             true,
             Set.of(s3Path(bucket, warehouseKeyPrefix)),
             Set.of(s3Path(bucket, warehouseKeyPrefix)),
@@ -1239,21 +1451,6 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
     String bucket = "bucket";
     String warehouseKeyPrefix = "path/to/warehouse";
 
-    RealmConfig sessionTagsEnabledConfig =
-        new RealmConfigImpl(
-            new PolarisConfigurationStore() {
-              @SuppressWarnings("unchecked")
-              @Override
-              public String getConfiguration(@Nonnull RealmContext ctx, String configName) {
-                if (configName.equals(
-                    FeatureConfiguration.INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL.key())) {
-                  return "true";
-                }
-                return null;
-              }
-            },
-            () -> "realm");
-
     ArgumentCaptor<AssumeRoleRequest> requestCaptor =
         ArgumentCaptor.forClass(AssumeRoleRequest.class);
     Mockito.when(stsClient.assumeRole(requestCaptor.capture())).thenReturn(ASSUME_ROLE_RESPONSE);
@@ -1267,7 +1464,7 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                 .build(),
             stsClient)
         .getSubscopedCreds(
-            sessionTagsEnabledConfig,
+            SESSION_TAGS_ENABLED_CONFIG,
             true,
             Set.of(s3Path(bucket, warehouseKeyPrefix)),
             Set.of(s3Path(bucket, warehouseKeyPrefix)),
@@ -1276,7 +1473,7 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
             CredentialVendingContext.empty());
 
     AssumeRoleRequest capturedRequest = requestCaptor.getValue();
-    // All 5 tags are always included; missing values use "unknown" placeholder
+    // 5 tags are included when session tags enabled but trace_id disabled (default)
     Assertions.assertThat(capturedRequest.tags()).hasSize(5);
     Assertions.assertThat(capturedRequest.tags())
         .anyMatch(
@@ -1290,6 +1487,86 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
         .anyMatch(tag -> tag.key().equals("polaris:table") && tag.value().equals("unknown"));
     Assertions.assertThat(capturedRequest.tags())
         .anyMatch(tag -> tag.key().equals("polaris:roles") && tag.value().equals("unknown"));
+    // trace_id is NOT included when INCLUDE_TRACE_ID_IN_SESSION_TAGS is not set (defaults to false)
+    Assertions.assertThat(capturedRequest.tags())
+        .noneMatch(tag -> tag.key().equals("polaris:trace_id"));
+  }
+
+  /**
+   * Helper method to invoke getSubscopedCreds and capture the AssumeRoleRequest for assertions.
+   *
+   * @param realmConfig the realm configuration to use
+   * @param context the credential vending context
+   * @return the captured AssumeRoleRequest
+   */
+  private AssumeRoleRequest invokeGetSubscopedCredsAndCaptureRequest(
+      RealmConfig realmConfig, CredentialVendingContext context) {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    String roleARN = "arn:aws:iam::012345678901:role/jdoe";
+    String externalId = "externalId";
+    String bucket = "bucket";
+    String warehouseKeyPrefix = "path/to/warehouse";
+
+    ArgumentCaptor<AssumeRoleRequest> requestCaptor =
+        ArgumentCaptor.forClass(AssumeRoleRequest.class);
+    Mockito.when(stsClient.assumeRole(requestCaptor.capture())).thenReturn(ASSUME_ROLE_RESPONSE);
+
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(s3Path(bucket, warehouseKeyPrefix))
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            realmConfig,
+            true,
+            Set.of(s3Path(bucket, warehouseKeyPrefix)),
+            Set.of(s3Path(bucket, warehouseKeyPrefix)),
+            POLARIS_PRINCIPAL,
+            Optional.empty(),
+            context);
+
+    return requestCaptor.getValue();
+  }
+
+  @Test
+  public void testRealmSessionTagIncludedWhenConfigured() {
+    CredentialVendingContext context =
+        CredentialVendingContext.builder()
+            .realm(Optional.of("my-realm"))
+            .catalogName(Optional.of("test-catalog"))
+            .namespace(Optional.of("db.schema"))
+            .tableName(Optional.of("my_table"))
+            .activatedRoles(Optional.of("admin"))
+            .build();
+
+    AssumeRoleRequest capturedRequest =
+        invokeGetSubscopedCredsAndCaptureRequest(SESSION_TAGS_WITH_REALM_CONFIG, context);
+
+    // 6 tags: realm + catalog + namespace + table + principal + roles
+    Assertions.assertThat(capturedRequest.tags()).hasSize(6);
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(tag -> tag.key().equals("polaris:realm") && tag.value().equals("my-realm"));
+    Assertions.assertThat(capturedRequest.tags())
+        .anyMatch(tag -> tag.key().equals("polaris:catalog") && tag.value().equals("test-catalog"));
+    Assertions.assertThat(capturedRequest.transitiveTagKeys()).contains("polaris:realm");
+  }
+
+  @Test
+  public void testRealmSessionTagNotIncludedWhenNotConfigured() {
+    CredentialVendingContext context =
+        CredentialVendingContext.builder()
+            .realm(Optional.of("my-realm"))
+            .catalogName(Optional.of("test-catalog"))
+            .build();
+
+    // SESSION_TAGS_ENABLED_CONFIG does NOT include "realm" in the field list
+    AssumeRoleRequest capturedRequest =
+        invokeGetSubscopedCredsAndCaptureRequest(SESSION_TAGS_ENABLED_CONFIG, context);
+
+    Assertions.assertThat(capturedRequest.tags())
+        .noneMatch(tag -> tag.key().equals("polaris:realm"));
   }
 
   /**
@@ -1309,19 +1586,7 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
     String warehouseKeyPrefix = "path/to/warehouse";
 
     RealmConfig sessionTagsEnabledConfig =
-        new RealmConfigImpl(
-            new PolarisConfigurationStore() {
-              @SuppressWarnings("unchecked")
-              @Override
-              public String getConfiguration(@Nonnull RealmContext ctx, String configName) {
-                if (configName.equals(
-                    FeatureConfiguration.INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL.key())) {
-                  return "true";
-                }
-                return null;
-              }
-            },
-            () -> "realm");
+        sessionTagFields("catalog", "namespace", "table", "principal", "roles");
 
     // Simulate STS throwing AccessDeniedException when sts:TagSession is not allowed
     // In AWS SDK v2, this is represented as StsException with error code "AccessDenied"
@@ -1370,5 +1635,46 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                         context))
         .isInstanceOf(software.amazon.awssdk.services.sts.model.StsException.class)
         .hasMessageContaining("sts:TagSession");
+  }
+
+  @Test
+  public void testNoKmsForNonAwsReadOnly() {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    String roleARN = "arn:aws:iam::012345678901:role/jdoe";
+    String externalId = "externalId";
+    String bucket = "bucket";
+    String warehouseKeyPrefix = "path/to/warehouse";
+
+    // Test with no KMS keys and read-only for non-AWS (should not add any KMS statement)
+    Mockito.when(stsClient.assumeRole(Mockito.isA(AssumeRoleRequest.class)))
+        .thenAnswer(
+            invocation -> {
+              AssumeRoleRequest request = invocation.getArgument(0);
+              IamPolicy policy = IamPolicy.fromJson(request.policy());
+
+              // Verify no KMS statement exists
+              assertThat(policy.statements())
+                  .noneMatch(
+                      stmt ->
+                          stmt.actions().stream()
+                              .anyMatch(action -> action.value().startsWith("kms:")));
+              return ASSUME_ROLE_RESPONSE;
+            });
+
+    new AwsCredentialsStorageIntegration(
+            AwsStorageConfigurationInfo.builder()
+                .addAllowedLocation(s3Path(bucket, warehouseKeyPrefix))
+                .roleARN(roleARN)
+                .externalId(externalId)
+                .build(),
+            stsClient)
+        .getSubscopedCreds(
+            EMPTY_REALM_CONFIG,
+            true,
+            Set.of(s3Path(bucket, warehouseKeyPrefix + "/table")),
+            Set.of(),
+            POLARIS_PRINCIPAL,
+            Optional.empty(),
+            CredentialVendingContext.empty());
   }
 }

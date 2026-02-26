@@ -23,11 +23,13 @@ import static org.apache.polaris.core.storage.aws.AwsSessionTagsBuilder.buildSes
 
 import jakarta.annotation.Nonnull;
 import java.net.URI;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.FeatureConfiguration;
@@ -93,42 +95,46 @@ public class AwsCredentialsStorageIntegration
         realmConfig.getConfig(STORAGE_CREDENTIAL_DURATION_SECONDS);
     AwsStorageConfigurationInfo storageConfig = config();
     String region = storageConfig.getRegion();
-    String accountId = storageConfig.getAwsAccountId();
     StorageAccessConfig.Builder accessConfig = StorageAccessConfig.builder();
 
     boolean includePrincipalNameInSubscopedCredential =
         realmConfig.getConfig(FeatureConfiguration.INCLUDE_PRINCIPAL_NAME_IN_SUBSCOPED_CREDENTIAL);
-    boolean includeSessionTags =
-        realmConfig.getConfig(FeatureConfiguration.INCLUDE_SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL);
+    List<String> sessionTagFieldNames =
+        realmConfig.getConfig(FeatureConfiguration.SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL);
+    Set<SessionTagField> enabledSessionTagFields =
+        sessionTagFieldNames.stream()
+            .map(SessionTagField::fromConfigName)
+            .flatMap(Optional::stream)
+            .collect(Collectors.toCollection(() -> EnumSet.noneOf(SessionTagField.class)));
 
     String roleSessionName =
         includePrincipalNameInSubscopedCredential
-            ? "polaris-" + polarisPrincipal.getName()
+            ? AwsRoleSessionNameSanitizer.sanitize("polaris-" + polarisPrincipal.getName())
             : "PolarisAwsCredentialsStorageIntegration";
-    String cappedRoleSessionName =
-        roleSessionName.substring(0, Math.min(roleSessionName.length(), 64));
 
     if (shouldUseSts(storageConfig)) {
       AssumeRoleRequest.Builder request =
           AssumeRoleRequest.builder()
               .externalId(storageConfig.getExternalId())
               .roleArn(storageConfig.getRoleARN())
-              .roleSessionName(cappedRoleSessionName)
+              .roleSessionName(roleSessionName)
               .policy(
                   policyString(
                           storageConfig,
                           allowListOperation,
                           allowedReadLocations,
                           allowedWriteLocations,
-                          region,
-                          accountId)
+                          region)
                       .toJson())
               .durationSeconds(storageCredentialDurationSeconds);
 
-      // Add session tags when the feature is enabled
-      if (includeSessionTags) {
+      // Add session tags for the configured fields.
+      // Note: trace_id is only present in context when the caller has included it
+      // (StorageAccessConfigProvider populates it when "trace_id" is in enabledSessionTagFields).
+      if (!enabledSessionTagFields.isEmpty()) {
         List<Tag> sessionTags =
-            buildSessionTags(polarisPrincipal.getName(), credentialVendingContext);
+            buildSessionTags(
+                polarisPrincipal.getName(), credentialVendingContext, enabledSessionTagFields);
         if (!sessionTags.isEmpty()) {
           request.tags(sessionTags);
           // Mark all tags as transitive for role chaining support
@@ -197,6 +203,10 @@ public class AwsCredentialsStorageIntegration
     return !Boolean.TRUE.equals(storageConfig.getStsUnavailable());
   }
 
+  private boolean shouldUseKms(AwsStorageConfigurationInfo storageConfig) {
+    return !Boolean.TRUE.equals(storageConfig.getKmsUnavailable());
+  }
+
   /**
    * generate an IamPolicy from the input readLocations and writeLocations, optionally with list
    * support. Credentials will be scoped to exactly the resources provided. If read and write
@@ -209,8 +219,7 @@ public class AwsCredentialsStorageIntegration
       boolean allowList,
       Set<String> readLocations,
       Set<String> writeLocations,
-      String region,
-      String accountId) {
+      String region) {
     IamPolicy.Builder policyBuilder = IamPolicy.builder();
     IamStatement.Builder allowGetObjectStatementBuilder =
         IamStatement.builder()
@@ -255,7 +264,8 @@ public class AwsCredentialsStorageIntegration
                           .addResource(key));
             });
 
-    if (!writeLocations.isEmpty()) {
+    boolean canWrite = !writeLocations.isEmpty();
+    if (canWrite) {
       IamStatement.Builder allowPutObjectStatementBuilder =
           IamStatement.builder()
               .effect(IamEffect.ALLOW)
@@ -269,9 +279,15 @@ public class AwsCredentialsStorageIntegration
                     arnPrefix + StorageUtil.concatFilePrefixes(parseS3Path(uri), "*", "/")));
           });
       policyBuilder.addStatement(allowPutObjectStatementBuilder.build());
-      addKmsKeyPolicy(currentKmsKey, allowedKmsKeys, policyBuilder, true, region, accountId);
-    } else {
-      addKmsKeyPolicy(currentKmsKey, allowedKmsKeys, policyBuilder, false, region, accountId);
+    }
+    if (shouldUseKms(storageConfigurationInfo)) {
+      addKmsKeyPolicy(
+          currentKmsKey,
+          allowedKmsKeys,
+          policyBuilder,
+          canWrite,
+          region,
+          storageConfigurationInfo.getAwsAccountId());
     }
     if (!bucketListStatementBuilder.isEmpty()) {
       bucketListStatementBuilder
@@ -297,9 +313,16 @@ public class AwsCredentialsStorageIntegration
       String region,
       String accountId) {
 
-    IamStatement.Builder allowKms = buildBaseKmsStatement(canWrite);
     boolean hasCurrentKey = kmsKeyArn != null;
     boolean hasAllowedKeys = hasAllowedKmsKeys(allowedKmsKeys);
+    boolean isAwsS3 = region != null && accountId != null;
+
+    // Nothing to do if no keys are configured and not AWS S3
+    if (!hasCurrentKey && !hasAllowedKeys && !isAwsS3) {
+      return;
+    }
+
+    IamStatement.Builder allowKms = buildBaseKmsStatement(canWrite);
 
     if (hasCurrentKey) {
       addKmsKeyResource(kmsKeyArn, allowKms);
@@ -309,16 +332,16 @@ public class AwsCredentialsStorageIntegration
       addAllowedKmsKeyResources(allowedKmsKeys, allowKms);
     }
 
-    // Add KMS statement if we have any KMS key configuration
-    if (hasCurrentKey || hasAllowedKeys) {
+    // Only add wildcard KMS access for read-only operations on AWS S3 when no specific keys are
+    // configured. This does not apply to services like Minio where region and accountId are not
+    // available.
+    boolean shouldAddWildcard = !hasCurrentKey && !hasAllowedKeys && !canWrite && isAwsS3;
+    if (shouldAddWildcard) {
+      addAllKeysResource(region, accountId, allowKms);
+    }
+
+    if (hasCurrentKey || hasAllowedKeys || shouldAddWildcard) {
       policyBuilder.addStatement(allowKms.build());
-    } else if (!canWrite) {
-      // Only add wildcard KMS access for read-only operations when no specific keys are configured
-      // this check is for minio because it doesn't have region or account id
-      if (region != null && accountId != null) {
-        addAllKeysResource(region, accountId, allowKms);
-        policyBuilder.addStatement(allowKms.build());
-      }
     }
   }
 
@@ -326,13 +349,14 @@ public class AwsCredentialsStorageIntegration
     IamStatement.Builder allowKms =
         IamStatement.builder()
             .effect(IamEffect.ALLOW)
-            .addAction("kms:GenerateDataKeyWithoutPlaintext")
             .addAction("kms:DescribeKey")
-            .addAction("kms:Decrypt")
-            .addAction("kms:GenerateDataKey");
+            .addAction("kms:Decrypt");
 
     if (canEncrypt) {
-      allowKms.addAction("kms:Encrypt");
+      allowKms
+          .addAction("kms:Encrypt")
+          .addAction("kms:GenerateDataKey")
+          .addAction("kms:GenerateDataKeyWithoutPlaintext");
     }
 
     return allowKms;

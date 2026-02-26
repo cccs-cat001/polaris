@@ -45,9 +45,7 @@ public abstract class AwsStorageConfigurationInfo extends PolarisStorageConfigur
     return ImmutableAwsStorageConfigurationInfo.builder();
   }
 
-  // Technically, it should be ^arn:(aws|aws-cn|aws-us-gov):iam::(\d{12}):role/.+$, but we've
-  // generalized it to support non-aws S3 implementations
-  @JsonIgnore public static final String ROLE_ARN_PATTERN = "^.+:(.*):iam:.*:(.*):role/.+$";
+  @JsonIgnore public static final String ROLE_ARN_PATTERN = "^.+:(.*):.+:.*:(.*):.+$";
 
   private static final Pattern ROLE_ARN_PATTERN_COMPILED = Pattern.compile(ROLE_ARN_PATTERN);
 
@@ -112,6 +110,12 @@ public abstract class AwsStorageConfigurationInfo extends PolarisStorageConfigur
    * support for unset values ({@code null} being interpreted as {@code false}).
    */
   public abstract @Nullable Boolean getStsUnavailable();
+
+  /**
+   * Flag indicating whether KMS is available or not. It is modeled in the negative to simplify
+   * support for unset values ({@code null} being interpreted as {@code false}).
+   */
+  public abstract @Nullable Boolean getKmsUnavailable();
 
   /** Endpoint URI for STS API calls */
   @Nullable

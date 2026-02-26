@@ -19,6 +19,8 @@
 
 package org.apache.polaris.service.catalog.io;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import jakarta.annotation.Nonnull;
 import jakarta.enterprise.context.RequestScoped;
 import jakarta.inject.Inject;
@@ -30,6 +32,7 @@ import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.config.FeatureConfiguration;
+import org.apache.polaris.core.context.RealmContext;
 import org.apache.polaris.core.entity.PolarisEntity;
 import org.apache.polaris.core.persistence.PolarisResolvedPathWrapper;
 import org.apache.polaris.core.storage.CredentialVendingContext;
@@ -55,15 +58,18 @@ public class StorageAccessConfigProvider {
   private final StorageCredentialCache storageCredentialCache;
   private final StorageCredentialsVendor storageCredentialsVendor;
   private final PolarisPrincipal polarisPrincipal;
+  private final RealmContext realmContext;
 
   @Inject
   public StorageAccessConfigProvider(
       StorageCredentialCache storageCredentialCache,
       StorageCredentialsVendor storageCredentialsVendor,
-      PolarisPrincipal polarisPrincipal) {
+      PolarisPrincipal polarisPrincipal,
+      RealmContext realmContext) {
     this.storageCredentialCache = storageCredentialCache;
     this.storageCredentialsVendor = storageCredentialsVendor;
     this.polarisPrincipal = polarisPrincipal;
+    this.realmContext = realmContext;
   }
 
   /**
@@ -165,6 +171,14 @@ public class StorageAccessConfigProvider {
       TableIdentifier tableIdentifier, PolarisResolvedPathWrapper resolvedPath) {
     CredentialVendingContext.Builder builder = CredentialVendingContext.builder();
 
+    List<String> sessionTagFields =
+        storageCredentialsVendor
+            .getRealmConfig()
+            .getConfig(FeatureConfiguration.SESSION_TAGS_IN_SUBSCOPED_CREDENTIAL);
+
+    // Realm identifier
+    builder.realm(Optional.of(realmContext.getRealmIdentifier()));
+
     // Extract catalog name from the first entity in the resolved path
     List<PolarisEntity> fullPath = resolvedPath.getRawFullPath();
     if (fullPath != null && !fullPath.isEmpty()) {
@@ -187,6 +201,26 @@ public class StorageAccessConfigProvider {
       builder.activatedRoles(Optional.of(rolesString));
     }
 
+    // Only include trace ID when "trace_id" is in the configured session tag fields.
+    // When included, trace IDs become part of the credential cache key (since they affect
+    // the vended credentials), which disables effective credential caching.
+    if (sessionTagFields.contains(FeatureConfiguration.SESSION_TAG_FIELD_TRACE_ID)) {
+      builder.traceId(getCurrentTraceId());
+    }
+
     return builder.build();
+  }
+
+  /**
+   * Extracts the current OpenTelemetry trace ID from the active span context.
+   *
+   * @return the trace ID if a valid span context exists, empty otherwise
+   */
+  private Optional<String> getCurrentTraceId() {
+    SpanContext spanContext = Span.current().getSpanContext();
+    if (spanContext.isValid()) {
+      return Optional.of(spanContext.getTraceId());
+    }
+    return Optional.empty();
   }
 }

@@ -144,6 +144,7 @@ class Arguments:
     USER_ARN = "user_arn"
     TENANT_ID = "tenant_id"
     MULTI_TENANT_APP_NAME = "multi_tenant_app_name"
+    HIERARCHICAL = "hierarchical"
     CONSENT_URL = "consent_url"
     SERVICE_ACCOUNT = "service_account"
     CATALOG_ROLE = "catalog_role"
@@ -179,6 +180,7 @@ class Arguments:
     ENDPOINT_INTERNAL = "endpoint_internal"
     STS_ENDPOINT = "sts_endpoint"
     STS_UNAVAILABLE = "no_sts"
+    KMS_UNAVAILABLE = "no_kms"
     KMS_KEY_CURRENT = "current_kms_key"
     KMS_KEY_ALLOWED = "allowed_kms_key"
     PATH_STYLE_ACCESS = "path_style_access"
@@ -257,6 +259,7 @@ class Hints:
                 "(Only for S3) The STS endpoint to use when connecting to STS"
             )
             STS_UNAVAILABLE = "(Only for S3) Indicates that Polaris should not use STS (e.g. if STS is not available)"
+            KMS_UNAVAILABLE = "(Only for S3) Indicates that Polaris should not use KMS (e.g. if KMS is not available)"
             PATH_STYLE_ACCESS = "(Only for S3) Whether to use path-style-access for S3"
             KMS_KEY_CURRENT = "(Only for AWS S3) The AWS KMS key ARN to be used for encrypting new S3 data"
             KMS_KEY_ALLOWED = "(Only for AWS S3) AWS KMS key ARN(s) that this catalog and its clients are allowed to use for reading S3 data (zero or more)"
@@ -265,6 +268,7 @@ class Hints:
             MULTI_TENANT_APP_NAME = (
                 "(Only for Azure) The app name to use when connecting to Azure Storage"
             )
+            HIERARCHICAL = "(Only for Azure) Indicates whether the referenced Azure storage location(s) support hierarchical namespaces"
             CONSENT_URL = "(Only for Azure) A consent URL granting permissions for the Azure Storage location"
 
             SERVICE_ACCOUNT = (
